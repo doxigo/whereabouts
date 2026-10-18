@@ -59,9 +59,15 @@ The menu-bar item is a small entry stamp next to the place. Calm states are an o
 
 The kill switch state outranks every other state, and the all-clear glyph never shows while a leak or a violation is active. The glyph is monochrome and follows the menu bar's appearance. It turns color when the menu-bar color alert is on.
 
-## Requirements
+## Install
 
-- macOS 14 or later
+Download the latest `Whereabouts-<version>.zip` from [Releases](https://github.com/doxigo/whereabouts/releases/latest), unzip it and move **Whereabouts.app** to Applications. It needs an Apple silicon Mac on macOS 14 or later.
+
+Releases are signed ad hoc, not notarized, so macOS blocks the first launch. Open the app once, then go to **System Settings › Privacy & Security** and click **Open Anyway**. Or clear the quarantine flag yourself:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Whereabouts.app
+```
 
 ## Building
 
@@ -79,7 +85,7 @@ This builds a release binary for Apple silicon (arm64) and writes `build/Whereab
 
 This builds the app, quits any running copy, replaces `/Applications/Whereabouts.app` and launches it.
 
-The script builds against the macOS 26.5 SDK in Command Line Tools (`/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`) when that SDK is installed. The macOS 27 SDK turns `@State` into a macro whose plugin ships only with full Xcode, so a Command Line Tools build needs the 26.5 SDK.
+When only Command Line Tools are selected, the script builds against their macOS 26.5 SDK (`/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`) if it's installed. The macOS 27 SDK turns `@State` into a macro whose plugin ships only with full Xcode, so a Command Line Tools build needs the 26.5 SDK. With Xcode selected, the script uses Xcode's own SDK.
 
 ### Code signing
 
@@ -97,6 +103,14 @@ The app has a built-in self-test for its rule logic (XCTest isn't part of Comman
 
 ```bash
 build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
+```
+
+### Releasing
+
+Pushing a version tag runs the [Release workflow](.github/workflows/release.yml) on a macOS 26 runner. It stamps the version from the tag into `Info.plist`, builds, runs the self-test, and publishes a GitHub release with the zipped app and generated notes:
+
+```bash
+git tag v1.1.0 && git push origin v1.1.0
 ```
 
 ## Regenerating the icon

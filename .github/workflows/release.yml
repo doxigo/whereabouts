@@ -1,0 +1,46 @@
+name: Release
+
+# Push a version tag to build, self-test and publish a release:
+#   git tag v1.1.0 && git push origin v1.1.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stamp the version from the tag
+        run: |
+          plutil -replace CFBundleShortVersionString -string "${GITHUB_REF_NAME#v}" Resources/Info.plist
+          plutil -replace CFBundleVersion -string "$GITHUB_RUN_NUMBER" Resources/Info.plist
+
+      # No signing identity on the runner, so build.sh signs ad hoc.
+      - run: ./build.sh
+
+      - name: Self-test
+        run: build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
+
+      - name: Package
+        run: ditto -c -k --keepParent build/Whereabouts.app "Whereabouts-${GITHUB_REF_NAME#v}.zip"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "Whereabouts-${GITHUB_REF_NAME#v}.zip" \
+            --title "Whereabouts ${GITHUB_REF_NAME#v}" --generate-notes --notes "$(cat <<'EOF'
+          For Apple silicon Macs on macOS 14 or later. Unzip and move **Whereabouts.app** to Applications.
+
+          The app is signed ad hoc, not notarized, so macOS blocks the first launch. Open it once, then go to **System Settings › Privacy & Security** and click **Open Anyway**. Or run:
+
+          ```bash
+          xattr -dr com.apple.quarantine /Applications/Whereabouts.app
+          ```
+          EOF
+          )"

@@ -11,9 +11,10 @@ SIGN_ID="${SIGN_ID:-CopperCast Dev}"
 security find-identity -v -p codesigning | grep -qF "\"$SIGN_ID\"" || SIGN_ID="-"
 
 # The macOS 27 SDK makes @State a macro whose plugin only ships with full Xcode;
-# the 26.5 SDK in Command Line Tools still has the property wrapper.
+# the 26.5 SDK in Command Line Tools still has the property wrapper. With Xcode
+# selected (CI), its own SDK has the plugin, so leave the choice to it.
 SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
-[ -d "$SDK" ] && export SDKROOT="$SDK"
+if [ "$(xcode-select -p)" = /Library/Developer/CommandLineTools ] && [ -d "$SDK" ]; then export SDKROOT="$SDK"; fi
 
 swift build -c release --arch arm64
 APP=build/Whereabouts.app
