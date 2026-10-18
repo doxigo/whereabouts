@@ -61,7 +61,7 @@ The kill switch state outranks every other state, and the all-clear glyph never 
 
 ## Install
 
-Download the latest `Whereabouts-<version>.zip` from [Releases](https://github.com/doxigo/whereabouts/releases/latest), unzip it and move **Whereabouts.app** to Applications. It needs an Apple silicon Mac on macOS 14 or later.
+Download the latest `Whereabouts-<version>.dmg` from [Releases](https://github.com/doxigo/whereabouts/releases/latest), open it and drag **Whereabouts** to Applications. It needs an Apple silicon Mac on macOS 14 or later.
 
 Releases are signed ad hoc, not notarized, so macOS blocks the first launch. Open the app once, then go to **System Settings › Privacy & Security** and click **Open Anyway**. Or clear the quarantine flag yourself:
 
@@ -107,11 +107,13 @@ build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
 
 ### Releasing
 
-Pushing a version tag runs the [Release workflow](.github/workflows/release.yml) on a macOS 26 runner. It stamps the version from the tag into `Info.plist`, builds, runs the self-test, and publishes a GitHub release with the zipped app and generated notes:
+Pushing a version tag runs the [Release workflow](.github/workflows/release.yml) on a macOS 26 runner. It stamps the version from the tag into `Info.plist`, builds, runs the self-test, and publishes a GitHub release with the app on a disk image and generated notes:
 
 ```bash
 git tag v1.1.0 && git push origin v1.1.0
 ```
+
+To rebuild an existing tag's release, run the workflow from the Actions tab with that tag. It replaces the disk image on the release.
 
 ## Regenerating the icon
 
