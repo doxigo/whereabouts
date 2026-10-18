@@ -3,8 +3,8 @@ import Foundation
 /// `--demo [safe|blocked]`: made-up state for README screenshots. Nothing is looked up,
 /// saved, announced or blocked, so it can run beside the real app without touching it.
 /// Addresses come from the documentation ranges (RFC 5737 / RFC 3849).
-/// With it, `--settings <Tab>` opens that Settings tab and `--menu` pops the status menu;
-/// `-theme light|dark` (read by UserDefaults from the arguments) fixes the appearance.
+/// With it, `--settings <Tab>` opens that Settings tab, and `-theme light|dark`
+/// (read by UserDefaults from the arguments) fixes the appearance.
 enum Demo {
     static let scenario: String? = {
         guard CommandLine.arguments.contains("--demo") else { return nil }
@@ -12,7 +12,6 @@ enum Demo {
     }()
     static var enabled: Bool { scenario != nil }
     static var settingsTab: String? { enabled ? value(after: "--settings") : nil }
-    static var opensMenu: Bool { enabled && CommandLine.arguments.contains("--menu") }
     private static var blocked: Bool { scenario == "blocked" }
 
     private static func value(after flag: String) -> String? {
@@ -57,7 +56,7 @@ enum Demo {
                                isp: "Example Cloud", isVpn: true, timeZone: "America/New_York")
             let reason = "Your IP is outside your allowed countries: United States."
             m.geo = GeoStatus(kind: .violation, location: loc, checkedAt: checked, message: reason, vpnName: "WireGuard")
-            m.kill = KillSwitchStatus(active: true, triggeredAt: checked, reason: reason)
+            m.kill = KillSwitchStatus(active: true, reason: reason)
         } else {
             let loc = Location(ip: "203.0.113.42", country: "Portugal", countryCode: "PT", city: "Lisbon",
                                isp: "Example Transit", isVpn: true, timeZone: "Europe/Lisbon")
@@ -68,11 +67,10 @@ enum Demo {
                                  message: blocked ? "bank.example expects Lisbon, Portugal, but you're in Ashburn, United States."
                                      : "bank.example expects Lisbon, Portugal, and that's where you are.")
         m.leak = LeakStatus(
-            ipv6: Ipv6Check(state: .ok, ip: "2001:db8:4a::17", country: "Portugal", countryCode: "PT", isp: "Example Transit",
+            ipv6: Ipv6Check(state: .ok, ip: "2001:db8:4a::17", isp: "Example Transit",
                             message: "Your IPv6 exit is in Portugal too."),
-            dns: DnsCheck(state: .ok, resolvers: [DnsResolver(address: "10.64.0.1", iface: "utun4", isPrivate: true, isTunnel: true)],
-                          message: "DNS goes through the VPN tunnel."),
-            checkedAt: checked)
+            dns: DnsCheck(state: .ok, resolvers: [DnsResolver(address: "10.64.0.1", iface: "utun4", isPrivate: true)],
+                          message: "DNS goes through the VPN tunnel."))
         // With the kill switch engaged nothing past the local network answers.
         m.reach = [("github.com", 38), ("wikipedia.org", 52), ("example.com", 61)].map {
             ReachResult(host: $0.0, status: blocked ? .blocked : .reachable, latencyMs: blocked ? nil : $0.1)

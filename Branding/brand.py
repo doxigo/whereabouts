@@ -67,7 +67,7 @@ LETTERS = _letters()
 SPACING = {" ": 3.0, "·": 1.9}
 
 
-def lettering(text, x, y, cap, color, tracking=1.5, anchor="middle", opacity=None):
+def lettering(text, x, y, cap, color, tracking=1.5, anchor="middle"):
     """SVG group for `text` with its cap-height top at y. Returns (svg, width_px)."""
     k = cap / 10
     units = sum(SPACING.get(c) or LETTERS[c][0] for c in text) + tracking * (len(text) - 1)
@@ -88,9 +88,8 @@ def lettering(text, x, y, cap, color, tracking=1.5, anchor="middle", opacity=Non
             d = f'<g clip-path="url(#band)">{d}</g>'
         out.append(f'<g transform="translate({cx:.3f} 0)">{d}</g>')
         cx += w + tracking
-    op = f' opacity="{opacity}"' if opacity is not None else ""
     svg = (f'<g transform="translate({x0:.2f} {y:.2f}) scale({k:.4f})" fill="none" stroke="{color}" '
-           f'stroke-width="{S}" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="12"{op}>'
+           f'stroke-width="{S}" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="12">'
            + "".join(out) + "</g>")
     return svg, width
 

@@ -306,7 +306,7 @@ final class Monitor {
     /// Country agreement settles a country violation; a provider violation also needs
     /// the other provider to report a non-matching ISP.
     private func confirmViolation(_ primary: Location, source: Provider, reason: ViolationReason) async -> Bool {
-        guard let second = try? await fetch(source == .ipApi ? .ipWho : .ipApi),
+        guard let second = try? await (source == .ipApi ? fetchIpWho() : fetchIpApi()),
               second.countryCode == primary.countryCode else { return false }
         if reason == .isp {
             guard let isp = second.isp else { return false }
@@ -379,7 +379,7 @@ final class Monitor {
         leakTask?.cancel()
         guard settings.ipv6Check || settings.dnsCheck else {
             leak = LeakStatus(ipv6: Ipv6Check(state: .off, message: "IPv6 leak check is off."),
-                              dns: DnsCheck(state: .off, message: "DNS leak check is off."), checkedAt: leak.checkedAt)
+                              dns: DnsCheck(state: .off, message: "DNS leak check is off."))
             leakAlertKey = nil
             return
         }

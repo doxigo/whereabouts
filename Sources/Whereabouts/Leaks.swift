@@ -64,7 +64,7 @@ extension Monitor {
         let baseline = geo.location
         async let ipv6 = checkIpv6(baseline)
         async let dns = checkDns(baseline)
-        leak = LeakStatus(ipv6: await ipv6, dns: await dns, checkedAt: Date())
+        leak = LeakStatus(ipv6: await ipv6, dns: await dns)
         announceLeaks()
     }
 
@@ -85,8 +85,7 @@ extension Monitor {
         guard let ip else { return Ipv6Check(state: .none, message: "No IPv6 connectivity — nothing can leak over IPv6.") }
 
         let located = await geolocate(ip)
-        var check = Ipv6Check(state: .unknown, ip: ip, country: located?.country, countryCode: located?.countryCode,
-                              isp: located?.isp, message: "")
+        var check = Ipv6Check(state: .unknown, ip: ip, isp: located?.isp, message: "")
         guard let located, let code = located.countryCode else {
             check.message = "You have IPv6 (\(ip)) but its location couldn't be resolved."
             return check
@@ -123,7 +122,7 @@ extension Monitor {
         let iface = block.iface
         let tunnel = isTunnelInterface(iface)
         var resolvers = block.nameservers.prefix(3).map {
-            DnsResolver(address: $0, iface: iface, isPrivate: isPrivateAddress($0), isTunnel: tunnel)
+            DnsResolver(address: $0, iface: iface, isPrivate: isPrivateAddress($0))
         }
         // Only public addresses geolocate, and the first two answer the question.
         for i in resolvers.indices.filter({ !resolvers[$0].isPrivate }).prefix(2) {

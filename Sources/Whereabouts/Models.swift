@@ -21,8 +21,10 @@ struct AlertPrefs: Codable, Equatable {
     var notifications = true
     var sound = false
     var edgeLine = false
+}
 
-    init() {}
+// The lenient decoders live in extensions so Swift still synthesizes the plain initializers.
+extension AlertPrefs {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         menuBarColor = c.get(.menuBarColor, menuBarColor)
@@ -50,25 +52,20 @@ struct SiteRule: Codable, Equatable, Identifiable {
     var killSwitch = false
     var id: String { domain }
 
-    init(domain: String, locations: [SiteLocation], edgeLine: Bool = false, killSwitch: Bool = false) {
-        self.domain = domain
-        self.locations = locations
-        self.edgeLine = edgeLine
-        self.killSwitch = killSwitch
+    var requirement: String {
+        let parts = locations.map(\.label)
+        guard parts.count > 1 else { return parts.first ?? "an allowed location" }
+        return parts.dropLast().joined(separator: ", ") + " or " + parts.last!
     }
+}
 
+extension SiteRule {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         domain = c.get(.domain, "")
         locations = c.get(.locations, [])
         edgeLine = c.get(.edgeLine, false)
         killSwitch = c.get(.killSwitch, false)
-    }
-
-    var requirement: String {
-        let parts = locations.map(\.label)
-        guard parts.count > 1 else { return parts.first ?? "an allowed location" }
-        return parts.dropLast().joined(separator: ", ") + " or " + parts.last!
     }
 }
 
@@ -99,36 +96,6 @@ struct AppSettings: Codable, Equatable {
     var warnAutomaticZone = true
     var warnRegion = true
 
-    init() {}
-
-    // Field by field, so one bad or missing key falls back alone instead of
-    // resetting everything.
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        ruleMode = c.get(.ruleMode, ruleMode)
-        countries = c.get(.countries, countries)
-        intervalMs = c.get(.intervalMs, intervalMs)
-        domains = c.get(.domains, domains)
-        siteRules = c.get(.siteRules, siteRules)
-        browserWatch = c.get(.browserWatch, browserWatch)
-        alerts = c.get(.alerts, alerts)
-        menuBarDisplay = c.get(.menuBarDisplay, menuBarDisplay)
-        menuBarClock = c.get(.menuBarClock, menuBarClock)
-        launchAtLogin = c.get(.launchAtLogin, launchAtLogin)
-        killSwitch = c.get(.killSwitch, killSwitch)
-        ispMode = c.get(.ispMode, ispMode)
-        expectedIsps = c.get(.expectedIsps, expectedIsps)
-        alertOnIspChange = c.get(.alertOnIspChange, alertOnIspChange)
-        confirmViolations = c.get(.confirmViolations, confirmViolations)
-        ipv6Check = c.get(.ipv6Check, ipv6Check)
-        dnsCheck = c.get(.dnsCheck, dnsCheck)
-        matchTimeZone = c.get(.matchTimeZone, matchTimeZone)
-        homeTimeZone = c.get(.homeTimeZone, homeTimeZone)
-        warnTimeZone = c.get(.warnTimeZone, warnTimeZone)
-        warnAutomaticZone = c.get(.warnAutomaticZone, warnAutomaticZone)
-        warnRegion = c.get(.warnRegion, warnRegion)
-    }
-
     mutating func normalize() {
         countries = countries.map { $0.uppercased() }
         domains = domains.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -157,6 +124,36 @@ struct AppSettings: Codable, Equatable {
             guard !locations.isEmpty else { return nil }
             return SiteRule(domain: domain, locations: locations, edgeLine: rule.edgeLine, killSwitch: rule.killSwitch)
         }
+    }
+}
+
+extension AppSettings {
+    // Field by field, so one bad or missing key falls back alone instead of
+    // resetting everything.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ruleMode = c.get(.ruleMode, ruleMode)
+        countries = c.get(.countries, countries)
+        intervalMs = c.get(.intervalMs, intervalMs)
+        domains = c.get(.domains, domains)
+        siteRules = c.get(.siteRules, siteRules)
+        browserWatch = c.get(.browserWatch, browserWatch)
+        alerts = c.get(.alerts, alerts)
+        menuBarDisplay = c.get(.menuBarDisplay, menuBarDisplay)
+        menuBarClock = c.get(.menuBarClock, menuBarClock)
+        launchAtLogin = c.get(.launchAtLogin, launchAtLogin)
+        killSwitch = c.get(.killSwitch, killSwitch)
+        ispMode = c.get(.ispMode, ispMode)
+        expectedIsps = c.get(.expectedIsps, expectedIsps)
+        alertOnIspChange = c.get(.alertOnIspChange, alertOnIspChange)
+        confirmViolations = c.get(.confirmViolations, confirmViolations)
+        ipv6Check = c.get(.ipv6Check, ipv6Check)
+        dnsCheck = c.get(.dnsCheck, dnsCheck)
+        matchTimeZone = c.get(.matchTimeZone, matchTimeZone)
+        homeTimeZone = c.get(.homeTimeZone, homeTimeZone)
+        warnTimeZone = c.get(.warnTimeZone, warnTimeZone)
+        warnAutomaticZone = c.get(.warnAutomaticZone, warnAutomaticZone)
+        warnRegion = c.get(.warnRegion, warnRegion)
     }
 }
 
@@ -251,8 +248,6 @@ enum DnsState { case off, checking, ok, leak, inconclusive, unknown }
 struct Ipv6Check {
     var state: Ipv6State
     var ip: String?
-    var country: String?
-    var countryCode: String?
     var isp: String?
     var message: String
 }
@@ -261,7 +256,6 @@ struct DnsResolver {
     var address: String
     var iface: String?
     var isPrivate: Bool
-    var isTunnel: Bool
     var country: String?
     var countryCode: String?
     var isp: String?
@@ -276,12 +270,10 @@ struct DnsCheck {
 struct LeakStatus {
     var ipv6 = Ipv6Check(state: .checking, message: "Checking your IPv6 exit…")
     var dns = DnsCheck(state: .checking, message: "Checking your DNS resolvers…")
-    var checkedAt: Date?
 }
 
 struct KillSwitchStatus {
     var active = false
-    var triggeredAt: Date?
     var reason: String?
     /// The setting is on but the installed helper is missing or outdated.
     var needsSetup = false

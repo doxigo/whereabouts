@@ -40,15 +40,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
         showStatus()
         if let tab = Demo.settingsTab { showSettingsTab(tab) }
-        if Demo.opensMenu {
-            // Popped over the status window: the item may sit in a crowded menu bar's
-            // overflow, and the menu's material needs a plain window behind it.
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(1))
-                guard let self, let frame = statusWindow?.frame else { return }
-                statusItem.menu?.popUp(positioning: nil, at: NSPoint(x: frame.minX + 60, y: frame.maxY - 140), in: nil)
-            }
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

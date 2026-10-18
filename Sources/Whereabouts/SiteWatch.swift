@@ -105,12 +105,11 @@ extension Monitor {
             return SiteWatchStatus(state: .idle, browser: name, message: "Couldn't read the active tab in \(name).")
         }
 
-        guard url.contains("://"), var host = URL(string: url)?.host?.lowercased(), !host.isEmpty else {
+        guard url.contains("://"), let host = normalizeDomain(url) else {
             return kind == .firefox
                 ? SiteWatchStatus(state: .unsupported, browser: name, message: "\(name)'s active tab URL can't be read for location checks.")
                 : SiteWatchStatus(state: .idle, browser: name, message: "No web page open in \(name).")
         }
-        if host.hasPrefix("www.") { host.removeFirst(4) }
 
         guard let rule = matchRule(host, settings.siteRules) else {
             siteAlertKey = nil

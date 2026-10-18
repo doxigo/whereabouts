@@ -25,10 +25,8 @@ enum KillSwitch {
     /// Lifts the block and removes the helper without the app — the safety net
     /// for a force-quit while blocked, or deleting the app while armed.
     static var manualUnblockCommand: String {
-        "sudo pfctl -a \(q(anchor)) -F all && sudo rm -f \(q(sudoersPath)) \(q(helperPath)) \(q(tokenFile))"
+        "sudo pfctl -a \(Privileged.q(anchor)) -F all && sudo rm -f \(Privileged.q(sudoersPath)) \(Privileged.q(helperPath)) \(Privileged.q(tokenFile))"
     }
-
-    private static func q(_ value: String) -> String { Privileged.q(value) }
 
     static let helperScript = #"""
     #!/bin/bash
@@ -38,8 +36,8 @@ enum KillSwitch {
     set -uo pipefail
 
     PFCTL=/sbin/pfctl
-    ANCHOR=\#(q(anchor))
-    TOKEN_FILE=\#(q(tokenFile))
+    ANCHOR=\#(Privileged.q(anchor))
+    TOKEN_FILE=\#(Privileged.q(tokenFile))
 
     emit_rules() {
       cat <<'WA_RULES'
@@ -122,14 +120,9 @@ enum KillSwitch {
     #!/bin/bash
     set -uo pipefail
     # Lift any active block first — removing the helper must never leave pf locked.
-    /sbin/pfctl -a \(q(anchor)) -F all >/dev/null 2>&1
-    if [ -s \(q(tokenFile)) ]; then
-      while IFS= read -r tok; do
-        [ -n "$tok" ] && /sbin/pfctl -X "$tok" >/dev/null 2>&1
-      done < \(q(tokenFile))
-    fi
-    /bin/rm -f \(q(sudoersPath)) \(q(helperPath)) \(q(tokenFile))
-    /bin/rmdir \(q(Privileged.appDir)) 2>/dev/null
+    \(Privileged.q(helperPath)) release >/dev/null 2>&1 || /sbin/pfctl -a \(Privileged.q(anchor)) -F all >/dev/null 2>&1
+    /bin/rm -f \(Privileged.q(sudoersPath)) \(Privileged.q(helperPath)) \(Privileged.q(tokenFile))
+    /bin/rmdir \(Privileged.q(Privileged.appDir)) 2>/dev/null
     exit 0
     """
 
@@ -207,11 +200,9 @@ extension Monitor {
         else { return }
         if engaged && !kill.active {
             kill.active = true
-            kill.triggeredAt = kill.triggeredAt ?? Date()
             kill.reason = kill.reason ?? "Network is still blocked from an earlier session."
         } else if !engaged && kill.active {
             kill.active = false
-            kill.triggeredAt = nil
             kill.reason = nil
         }
     }
@@ -229,7 +220,6 @@ extension Monitor {
         do {
             _ = try await KillSwitch.sudoHelper("engage")
             kill.active = true
-            kill.triggeredAt = Date()
             kill.reason = reason
             kill.error = nil
             killActivation += 1
@@ -267,7 +257,6 @@ extension Monitor {
         do {
             _ = try await KillSwitch.sudoHelper("release")
             kill.active = false
-            kill.triggeredAt = nil
             kill.reason = nil
             kill.error = nil
             killActivation += 1

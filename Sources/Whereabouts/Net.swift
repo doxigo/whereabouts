@@ -176,10 +176,6 @@ func fetchIpWho(_ ip: String? = nil) async throws -> Location {
                     timeZone: (d["timezone"] as? [String: Any]).flatMap { string($0, "id") })
 }
 
-func fetch(_ provider: Provider) async throws -> Location {
-    provider == .ipApi ? try await fetchIpApi() : try await fetchIpWho()
-}
-
 /// Geolocate any address (leak checks). HTTPS first — a leak verdict shouldn't rest on plaintext.
 func geolocate(_ ip: String) async -> Location? {
     if let l = try? await fetchIpWho(ip) { return l }
