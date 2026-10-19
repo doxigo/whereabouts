@@ -94,6 +94,8 @@ struct StatusView: View {
             LabeledContent("ISP", value: loc?.isp ?? "—")
             // The provider only says "looks like a proxy"; the name comes from the machine.
             LabeledContent("VPN / Proxy", value: m.geo.vpnName.map { "\(flag) · \($0)" } ?? flag)
+            // Live: Match time zone changes it, and NSSystemTimeZoneDidChange refreshes it.
+            LabeledContent("Mac time zone", value: m.systemTimeZone.replacingOccurrences(of: "_", with: " "))
         }
         .textSelection(.enabled)
     }
