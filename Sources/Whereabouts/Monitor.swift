@@ -12,17 +12,23 @@ final class Monitor {
     var geo = GeoStatus()
     var reach: [ReachResult] = []
     var site = SiteWatchStatus()
+    /// The last site read from a browser tab. `site.host` clears once Settings is in front; this is what Settings offers.
+    var lastSiteHost: String?
     var leak = LeakStatus()
     var kill = KillSwitchStatus()
     private(set) var history: [HistoryEntry]
     private(set) var isCheckingAll = false
+    /// A newer GitHub release than this build, if update checks are on.
+    private(set) var latestRelease: (version: String, url: URL)?
+    /// Alerts and the kill switch stand down until then, for turning the VPN off on purpose.
+    private(set) var pausedUntil: Date?
     var systemTimeZone = TimeZone.current.identifier
     var timeZoneError: String?
 
     var leaking: Bool { leak.ipv6.state == .leak || leak.dns.state == .leak }
     var edgeLineVisible: Bool {
-        (settings.alerts.edgeLine && geo.kind == .violation)
-            || (site.state == .mismatch && site.rule?.edgeLine == true)
+        pausedUntil == nil && ((settings.alerts.edgeLine && geo.kind == .violation)
+            || (site.state == .mismatch && site.rule?.edgeLine == true))
     }
 
     // Loop bookkeeping — not UI state.
@@ -49,6 +55,8 @@ final class Monitor {
     @ObservationIgnored private var siteTask: Task<Void, Never>?
     @ObservationIgnored private var leakTask: Task<Void, Never>?
     @ObservationIgnored private var wakeTask: Task<Void, Never>?
+    @ObservationIgnored private var pauseTask: Task<Void, Never>?
+    @ObservationIgnored var reblockTask: Task<Void, Never>?
     @ObservationIgnored private var netDebounce: Task<Void, Never>?
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
     @ObservationIgnored private var pathSatisfied = true
@@ -75,6 +83,7 @@ final class Monitor {
         siteTask = loop(every: 5) { await $0.checkSite() }
         startLeakLoop()
         startNetworkWatch()
+        _ = loop(every: 86_400, delay: 30) { await $0.checkForUpdate() }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.recheckConnectivity() }
         }
@@ -120,6 +129,7 @@ final class Monitor {
         if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone) {
             Task { await syncTimeZone() }
         }
+        if old.checkUpdates != next.checkUpdates { Task { await checkForUpdate() } }
     }
 
     private func syncLoginItem() {
@@ -134,6 +144,42 @@ final class Monitor {
     func clearHistory() {
         history = []
         Store.save(history)
+    }
+
+    // MARK: Pause
+
+    func pause(for seconds: Double = 3600) {
+        pausedUntil = Date().addingTimeInterval(seconds)
+        pauseTask?.cancel()
+        pauseTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            if !Task.isCancelled { self?.resume() }
+        }
+    }
+
+    func resume() {
+        pauseTask?.cancel()
+        pausedUntil = nil
+        // Whatever went wrong during the pause was never announced or acted on, so treat it as new.
+        treatViolationAsNew()
+        siteAlertKey = nil
+        leakAlertKey = nil
+        Task { await checkAll() }
+    }
+
+    /// The next violating check counts as new: it alerts and can engage the kill switch again.
+    func treatViolationAsNew() { if prevKind == .violation { prevKind = nil } }
+
+    // MARK: Updates
+
+    func checkForUpdate() async {
+        guard settings.checkUpdates else { latestRelease = nil; return }
+        guard let release = try? await fetchJSON("https://api.github.com/repos/doxigo/whereabouts/releases/latest"),
+              let tag = release["tag_name"] as? String,
+              let url = (release["html_url"] as? String).flatMap(URL.init(string:)) else { return }
+        let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        latestRelease = latest.compare(current, options: .numeric) == .orderedDescending ? (latest, url) : nil
     }
 
     // MARK: Loops
@@ -217,14 +263,15 @@ final class Monitor {
 
     // MARK: Alerts
 
-    func notify(_ title: String, _ body: String, sound: Bool = false) {
-        if Demo.enabled { return }
+    /// A new alert on the same `topic` (the title by default) replaces the old one in Notification Center.
+    func notify(_ title: String, _ body: String, sound: Bool = false, topic: String? = nil) {
+        if Demo.enabled || pausedUntil != nil { return }
         if sound && settings.alerts.sound { NSSound.beep() }
         guard settings.alerts.notifications else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: topic ?? title, content: content, trigger: nil))
     }
 
     // MARK: Geo
@@ -251,6 +298,13 @@ final class Monitor {
             status = GeoStatus(kind: verdict.kind, location: location, checkedAt: Date(),
                                message: confirmed == false ? verdict.message + " Not confirmed — the second provider disagrees." : verdict.message,
                                confirmed: confirmed, vpnName: vpnName)
+        } else if kill.active {
+            // Our own block stops every lookup, so this failure says nothing new: keep
+            // the last answer (and its check time) instead of calling the block "offline".
+            if geo.location == nil {
+                geo = GeoStatus(kind: .unknown, message: "Can't check your location while the network is blocked.")
+            }
+            return geo
         } else {
             // "No route out" vs "the provider is broken": addresses survive sleep and
             // VPN transitions, so only a real probe can tell them apart.
@@ -319,9 +373,9 @@ final class Monitor {
         if status.kind != .violation { killDeferred = false }
 
         if becameViolation {
-            notify("Location alert", status.message, sound: true)
+            notify("Location not allowed", status.message, sound: true, topic: "geo")
         } else if recovered {
-            notify("Back to safe", status.message)
+            notify("Location allowed again", status.message, topic: "geo")
         } else if let isp = ispChangedTo {
             notify("Provider changed", "You're now connected through \(isp).")
         }
@@ -368,8 +422,8 @@ final class Monitor {
 
         for result in reach {
             guard let prev = previous[result.host]?.status, prev != .checking, prev != result.status else { continue }
-            if result.status == .blocked { notify("Host unreachable", "\(result.host) is now blocked or unreachable.") }
-            if result.status == .reachable { notify("Host reachable", "\(result.host) is reachable again.") }
+            if result.status == .blocked { notify("Host unreachable", "\(result.host) is now blocked or unreachable.", topic: "reach|\(result.host)") }
+            if result.status == .reachable { notify("Host reachable", "\(result.host) is reachable again.", topic: "reach|\(result.host)") }
         }
     }
 
@@ -405,8 +459,11 @@ func evaluateLocation(_ location: Location, _ settings: AppSettings) -> Verdict 
     let listed = settings.countries.contains(code)
     let place = location.place
     let blocklist = settings.ruleMode == .blocklist
+    // An empty allowlist is no rule yet, not "everywhere is wrong": picking
+    // Allowlist before adding a country must not cut the network.
+    let unset = !blocklist && settings.countries.isEmpty
 
-    if blocklist ? listed : !listed {
+    if blocklist ? listed : (!listed && !unset) {
         return Verdict(kind: .violation,
                        message: blocklist ? "Your IP is in a blocked country: \(place)." : "Your IP is outside your allowed countries: \(place).",
                        reason: .country)
@@ -417,5 +474,7 @@ func evaluateLocation(_ location: Location, _ settings: AppSettings) -> Verdict 
        !ispMatches(isp, settings.expectedIsps) {
         return Verdict(kind: .violation, message: "Unexpected provider: \(isp) in \(place) isn't one you expect.", reason: .isp)
     }
-    return Verdict(kind: .safe, message: blocklist ? "Your IP is in \(place) — not blocked." : "Your IP is in an allowed country: \(place).")
+    return Verdict(kind: .safe, message: settings.countries.isEmpty ? "Your IP is in \(place). No countries are set yet."
+                   : blocklist ? "Your IP is in \(place) — not blocked."
+                   : "Your IP is in an allowed country: \(place).")
 }

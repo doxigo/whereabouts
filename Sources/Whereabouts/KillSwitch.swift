@@ -15,6 +15,14 @@ import Foundation
 /// re-arm. `unknown` (offline, mid-reconnect) must never count as a recovery.
 enum TriggerState { case violating, clear, unknown }
 
+/// Why the kill switch should block again when the unblock window ends; nil lets the next check decide.
+func reblockReason(_ geo: GeoStatus, _ site: SiteWatchStatus) -> String? {
+    // An unconfirmed violation never cuts the network on its own; it waits for the next check.
+    if geo.kind == .violation && geo.confirmed != false { return geo.message }
+    if site.state == .mismatch && site.rule?.killSwitch == true { return site.message }
+    return nil
+}
+
 enum KillSwitch {
     static let helperVersion = 1
     static let helperPath = "\(Privileged.appDir)/killswitch-helper.sh"
@@ -144,11 +152,32 @@ extension Monitor {
     func reportTriggerState(_ source: String, _ state: TriggerState) {
         triggerStates[source] = state
         guard kill.suppressed, !triggerStates.isEmpty, triggerStates.values.allSatisfy({ $0 == .clear }) else { return }
-        kill.suppressed = false
+        kill.reblockAt = nil
         log.info("Kill switch re-armed — every monitor is clear again")
     }
 
-    func rearmKillSwitch() { kill.suppressed = false }
+    func rearmKillSwitch() { kill.reblockAt = nil }
+
+    /// Seconds a manual unblock gives the VPN to reconnect before the kill switch blocks again.
+    static let reblockDelay: Double = 120
+
+    /// The end of the unblock window: the kill switch arms again, and blocks at once
+    /// if the location still isn't allowed.
+    func reblockIfStillWrong() async {
+        guard kill.suppressed else { return } // re-armed meanwhile
+        // A fresh answer, taken while still standing down so this check can't fire twice.
+        let status = await checkGeo()
+        guard kill.suppressed else { return } // that check came back clear and re-armed it
+        kill.reblockAt = nil
+        siteAlertKey = nil // a site mismatch that outlived the window counts as new
+        if settings.killSwitch, let reason = reblockReason(status, site) {
+            log.warning("Still not allowed when the unblock window ended — blocking again")
+            await activateKillSwitch(reason)
+        } else {
+            // Unconfirmed or not known yet: the next violating check decides, as usual.
+            treatViolationAsNew()
+        }
+    }
 
     /// Toggled from Settings: install or remove the privileged helper.
     func setKillSwitch(_ on: Bool) async {
@@ -157,7 +186,7 @@ extension Monitor {
         guard on else {
             do {
                 try await Privileged.run(KillSwitch.teardownScript, prompt: "Whereabouts needs your admin password to remove the kill switch helper.")
-                kill = KillSwitchStatus(suppressed: kill.suppressed)
+                kill = KillSwitchStatus(reblockAt: kill.reblockAt)
             } catch {
                 log.error("Kill switch teardown failed: \(error.localizedDescription)")
             }
@@ -209,10 +238,14 @@ extension Monitor {
 
     func activateKillSwitch(_ reason: String) async {
         guard !kill.active, !killInFlight, !Demo.enabled else { return }
-        // The user already answered this by unblocking; re-blocking over the same
-        // unresolved condition would undo their decision.
+        // The user unblocked to reconnect; blocking again inside that window would
+        // undo their decision. reblockIfStillWrong() takes over when it ends.
         guard !kill.suppressed else {
-            log.info("Kill switch trigger ignored — paused since the manual unblock")
+            log.info("Kill switch trigger ignored — inside the manual unblock window")
+            return
+        }
+        guard pausedUntil == nil else {
+            log.info("Kill switch trigger ignored — paused from the menu")
             return
         }
         killInFlight = true
@@ -246,11 +279,16 @@ extension Monitor {
         }
     }
 
-    /// Manual unblock. Also pauses the kill switch for the session, or the next
-    /// check (still in the wrong place) would re-engage it immediately.
+    /// Manual unblock. The kill switch stands down for `reblockDelay` so the VPN can
+    /// reconnect, or the next check (still in the wrong place) would re-engage it at once.
     func restoreConnection() async {
-        kill.suppressed = true
+        kill.reblockAt = Date().addingTimeInterval(Self.reblockDelay)
         if Demo.enabled { kill.active = false; return }
+        reblockTask?.cancel()
+        reblockTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.reblockDelay))
+            if !Task.isCancelled { await self?.reblockIfStillWrong() }
+        }
         guard kill.active, !killInFlight else { return }
         killInFlight = true
         defer { killInFlight = false }

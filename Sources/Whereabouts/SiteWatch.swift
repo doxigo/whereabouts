@@ -110,6 +110,7 @@ extension Monitor {
                 ? SiteWatchStatus(state: .unsupported, browser: name, message: "\(name)'s active tab URL can't be read for location checks.")
                 : SiteWatchStatus(state: .idle, browser: name, message: "No web page open in \(name).")
         }
+        if host != lastSiteHost { lastSiteHost = host }
 
         guard let rule = matchRule(host, settings.siteRules) else {
             siteAlertKey = nil

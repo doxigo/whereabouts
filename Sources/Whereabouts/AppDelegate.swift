@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private var statusItem: NSStatusItem!
     private var statusWindow: NSWindow?
     private var settingsWindow: NSWindow?
-    private var edgeLine: NSWindow?
+    private var edgeLines: [NSWindow] = []
     private var clockTick: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -38,6 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         NotificationCenter.default.addObserver(forName: .NSSystemClockDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.renderStatusItem() }
         }
+        // A display plugged in or rearranged while the edge line shows.
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { guard let self else { return }; self.setEdgeLine(self.monitor.edgeLineVisible) }
+        }
         showStatus()
         if let tab = Demo.settingsTab { showSettingsTab(tab) }
     }
@@ -55,6 +59,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completion: @escaping (UNNotificationPresentationOptions) -> Void) {
         completion([.banner, .list])
+    }
+
+    /// Clicking an alert opens the Status window, which shows every open issue.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completion: @escaping () -> Void) {
+        Task { @MainActor in self.showStatus() }
+        completion()
     }
 
     /// Re-runs `body` whenever any observed Monitor property it read changes.
@@ -133,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         menu.addItem(headerItem(MenuHeader(
             glyph: StampGlyph.image(mark, color: color),
             title: m.kill.active ? "Internet blocked" : m.geo.kind == .offline ? "No connection" : m.geo.location?.cityPlace ?? "Location unknown",
-            detail: m.kill.active ? "Kill switch engaged" : m.geo.kind.label + checked,
+            detail: m.kill.active ? "Kill switch engaged" : m.geoBadge.label + checked,
             warning: m.leaking ? m.leakHeadline : nil)))
 
         let warnings = m.consistency
@@ -153,14 +164,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         if m.kill.active {
             menu.addItem(.separator())
             menu.addItem(action("Unblock Network", "wifi") { Task { await m.restoreConnection() } })
-        } else if m.kill.suppressed && m.settings.killSwitch {
+        } else if let at = m.kill.reblockAt, m.settings.killSwitch {
             menu.addItem(.separator())
-            menu.addItem(disabled: "Kill switch paused — you unblocked it")
+            menu.addItem(disabled: "Unblocked — blocks again at \(at.formatted(date: .omitted, time: .shortened)) if still not allowed")
             menu.addItem(action("Re-arm Kill Switch", "shield") { m.rearmKillSwitch() })
         }
         menu.addItem(.separator())
         menu.addItem(action("Show Status", "macwindow") { [weak self] in self?.showStatus() })
         menu.addItem(action("Check Now", "arrow.clockwise") { Task { await m.checkAll() } })
+        if let until = m.pausedUntil {
+            menu.addItem(disabled: "Paused until \(until.formatted(date: .omitted, time: .shortened))")
+            menu.addItem(action("Resume Now", "play.circle") { m.resume() })
+        } else {
+            let item = action("Pause for 1 Hour", "pause.circle") { m.pause() }
+            let detail = "No alerts, and the kill switch won't block"
+            if #available(macOS 14.4, *) { item.subtitle = detail } else { item.toolTip = detail }
+            menu.addItem(item)
+        }
+        if let release = m.latestRelease {
+            menu.addItem(action("Update Available: \(release.version)…", "arrow.down.circle") { NSWorkspace.shared.open(release.url) })
+        }
         menu.addItem(.separator())
         menu.addItem(action("Settings…", "gearshape", key: ",") { [weak self] in self?.openSettings() })
         menu.addItem(action("Quit Whereabouts", "power", key: "q") { NSApp.terminate(nil) })
@@ -284,22 +307,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     // MARK: Edge line
 
-    /// Thin click-through red line across the top of the primary display.
+    /// Thin click-through red line across the top of every display.
     private func setEdgeLine(_ visible: Bool) {
-        guard visible, let screen = NSScreen.screens.first else { edgeLine?.orderOut(nil); return }
-        let frame = NSRect(x: screen.frame.minX, y: screen.frame.maxY - 4, width: screen.frame.width, height: 4)
-        if edgeLine == nil {
-            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let screens = visible ? NSScreen.screens : []
+        while edgeLines.count < screens.count {
+            let window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
             window.backgroundColor = .systemRed
             window.hasShadow = false
             window.ignoresMouseEvents = true
             window.level = .screenSaver
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
             window.isReleasedWhenClosed = false
-            edgeLine = window
+            edgeLines.append(window)
         }
-        edgeLine?.setFrame(frame, display: true)
-        edgeLine?.orderFrontRegardless()
+        for (i, window) in edgeLines.enumerated() {
+            guard i < screens.count else { window.orderOut(nil); continue }
+            let f = screens[i].frame
+            window.setFrame(NSRect(x: f.minX, y: f.maxY - 4, width: f.width, height: 4), display: true)
+            window.orderFrontRegardless()
+        }
     }
 }
 
@@ -342,8 +368,8 @@ private extension NSMenu {
 extension GeoKind {
     var label: String {
         switch self {
-        case .safe: "Safe"
-        case .violation: "Violation"
+        case .safe: "Allowed"
+        case .violation: "Not allowed"
         case .unknown: "Unknown"
         case .offline: "Offline"
         case .checking: "Checking…"

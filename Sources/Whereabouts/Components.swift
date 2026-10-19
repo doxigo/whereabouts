@@ -95,36 +95,34 @@ struct AddField: View {
     }
 }
 
-/// Button that opens a searchable country list.
-struct CountryPicker: View {
-    var title = "Add Country…"
-    var exclude: Set<String> = []
+/// Button that opens a searchable list. Typing an item's `detail` exactly (a country code) also finds it.
+struct SearchPicker: View {
+    let title: String
+    let prompt: String
+    let items: [(id: String, label: String, detail: String)]
     let onPick: (String) -> Void
     @State private var shown = false
     @State private var query = ""
 
-    private var results: [(code: String, name: String)] {
+    private var results: [(id: String, label: String, detail: String)] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return Countries.all.filter {
-            !exclude.contains($0.code) && (q.isEmpty || $0.name.lowercased().contains(q) || $0.code.lowercased() == q)
-        }
+        return q.isEmpty ? items : items.filter { $0.label.lowercased().contains(q) || $0.detail.lowercased() == q }
     }
 
     var body: some View {
         Button(title) { shown = true }
             .popover(isPresented: $shown, arrowEdge: .bottom) {
                 VStack(spacing: 0) {
-                    TextField("Search countries", text: $query)
+                    TextField(prompt, text: $query)
                         .textFieldStyle(.roundedBorder)
                         .padding(8)
-                        .onSubmit { if let first = results.first { pick(first.code) } }
-                    List(results, id: \.code) { country in
-                        Button { pick(country.code) } label: {
+                        .onSubmit { if let first = results.first { pick(first.id) } }
+                    List(results, id: \.id) { item in
+                        Button { pick(item.id) } label: {
                             HStack {
-                                Text(Countries.flag(country.code))
-                                Text(country.name)
+                                Text(item.label)
                                 Spacer()
-                                Text(country.code).foregroundStyle(.tertiary)
+                                Text(item.detail).foregroundStyle(.tertiary)
                             }
                             .contentShape(Rectangle())
                         }
@@ -135,10 +133,22 @@ struct CountryPicker: View {
             }
     }
 
-    private func pick(_ code: String) {
-        onPick(code)
+    private func pick(_ id: String) {
+        onPick(id)
         shown = false
         query = ""
+    }
+}
+
+struct CountryPicker: View {
+    var title = "Add Country…"
+    var exclude: Set<String> = []
+    let onPick: (String) -> Void
+
+    var body: some View {
+        SearchPicker(title: title, prompt: "Search countries",
+                     items: Countries.all.filter { !exclude.contains($0.code) }.map { ($0.code, "\(Countries.flag($0.code)) \($0.name)", $0.code) },
+                     onPick: onPick)
     }
 }
 

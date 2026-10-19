@@ -47,13 +47,17 @@ struct GeneralSettings: View {
                     Text("Launch at login")
                     Text("Start monitoring automatically when you log in.")
                 }
+                Toggle(isOn: m.binding(\.checkUpdates)) {
+                    Text("Check for updates")
+                    Text("Once a day, ask GitHub whether a newer release is out. A new version shows in the menu.")
+                }
             }
 
             Section("Alerts") {
                 Toggle(isOn: m.binding(\.alerts.menuBarColor)) { Text("Menu bar color"); Text("Tint the menu bar icon by status.") }
                 Toggle(isOn: m.binding(\.alerts.notifications)) { Text("Notifications"); Text("Show a banner when something changes.") }
-                Toggle(isOn: m.binding(\.alerts.sound)) { Text("Sound"); Text("Play a system sound on a violation.") }
-                Toggle(isOn: m.binding(\.alerts.edgeLine)) { Text("Screen-edge line"); Text("Show a red line across the top of the screen.") }
+                Toggle(isOn: m.binding(\.alerts.sound)) { Text("Sound"); Text("Play a sound when your location is wrong or leaking.") }
+                Toggle(isOn: m.binding(\.alerts.edgeLine)) { Text("Screen-edge line"); Text("Show a red line along the top of every screen while your location isn't allowed.") }
             }
 
             Section {
@@ -130,6 +134,9 @@ struct LocationSettings: View {
                     }
                 }
                 CountryPicker(exclude: Set(m.settings.countries)) { code in m.update { $0.countries.append(code) } }
+                if let code = m.geo.location?.countryCode, !m.settings.countries.contains(code) {
+                    Button("Add current: \(Countries.flag(code)) \(Countries.name(code) ?? code)") { m.update { $0.countries.append(code) } }
+                }
             }
 
             Section {
@@ -185,11 +192,13 @@ struct LocationSettings: View {
                     Text("Turn off “Set time zone automatically using your current location” in General › Date & Time, or macOS will keep switching it back.")
                 }
             }
-            Picker("Home time zone", selection: Binding(get: { m.settings.homeTimeZone ?? m.systemTimeZone },
-                                                        set: { zone in m.update { $0.homeTimeZone = zone } })) {
-                ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ")).tag($0) }
+            LabeledContent("Home time zone") {
+                SearchPicker(title: zoneName(m.settings.homeTimeZone ?? m.systemTimeZone), prompt: "Search time zones",
+                             items: TimeZone.knownTimeZoneIdentifiers.map { ($0, zoneName($0), "") }) { zone in
+                    m.update { $0.homeTimeZone = zone }
+                }
             }
-            LabeledContent("Mac is set to", value: m.systemTimeZone.replacingOccurrences(of: "_", with: " "))
+            LabeledContent("Mac is set to", value: zoneName(m.systemTimeZone))
             if let error = m.timeZoneError {
                 Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
             }
@@ -246,7 +255,7 @@ struct SiteSettings: View {
                 Footer("Require specific IP locations per website — the rule is satisfied if your IP is in any one of them. For example, your bank only from your home country, or a shop only from one of two cities.")
             }
 
-            Section("Rules") {
+            Section {
                 ForEach(m.settings.siteRules) { rule in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -260,8 +269,10 @@ struct SiteSettings: View {
                         Text(rule.locations.map { "\(Countries.flag($0.countryCode)) \($0.label)" }.joined(separator: "   "))
                             .foregroundStyle(.secondary)
                         HStack(spacing: 16) {
-                            Toggle("Border", isOn: ruleBinding(rule.domain, \.edgeLine)).help("Show a red screen border on mismatch")
-                            Toggle("Cut network", isOn: ruleBinding(rule.domain, \.killSwitch)).help("Cut the network on mismatch (needs the kill switch on)")
+                            Toggle("Edge line", isOn: ruleBinding(rule.domain, \.edgeLine)).help("Show the red screen-edge line on mismatch")
+                            Toggle("Cut network", isOn: ruleBinding(rule.domain, \.killSwitch))
+                                .disabled(!m.settings.killSwitch)
+                                .help("Cut the network on mismatch")
                         }
                         .toggleStyle(.checkbox)
                         .font(.callout)
@@ -269,11 +280,18 @@ struct SiteSettings: View {
                     .padding(.vertical, 2)
                 }
                 Button("Add Rule…") { draft = RuleDraft(rule: SiteRule(domain: "", locations: [])) }
+            } header: {
+                Text("Rules")
+            } footer: {
+                if !m.settings.killSwitch && !m.settings.siteRules.isEmpty {
+                    Footer("Cut network needs the kill switch, which is off. Turn it on in Protection.")
+                }
             }
         }
         .formStyle(.grouped)
         .sheet(item: $draft) { d in
             SiteRuleEditor(rule: d.rule, isNew: d.original == nil) { saved in save(saved, replacing: d.original) }
+                .environment(m)
         }
     }
 
@@ -305,6 +323,7 @@ private struct SiteRuleEditor: View {
     @State var rule: SiteRule
     let isNew: Bool
     let onSave: (SiteRule) -> Void
+    @Environment(Monitor.self) private var m
     @Environment(\.dismiss) private var dismiss
     @State private var country: String?
     @State private var city = ""
@@ -321,6 +340,9 @@ private struct SiteRuleEditor: View {
             Form {
                 Section {
                     TextField("Website", text: $rule.domain, prompt: Text("example.com"))
+                    if isNew, let host = m.lastSiteHost, normalizeDomain(rule.domain) != host {
+                        Button("Use last tab: \(host)") { rule.domain = host }
+                    }
                 }
                 Section("Allowed locations") {
                     ForEach(rule.locations, id: \.key) { location in
@@ -338,12 +360,18 @@ private struct SiteRuleEditor: View {
                         }
                         .disabled(country == nil)
                     }
+                    if let loc = m.geo.location, let code = loc.countryCode {
+                        let current = SiteLocation(countryCode: code, country: loc.country ?? code, city: loc.city)
+                        if !rule.locations.contains(where: { $0.key == current.key }) {
+                            Button("Add current: \(Countries.flag(code)) \(current.label)") { rule.locations.append(current) }
+                        }
+                    }
                 }
                 Section {
-                    Toggle("Red screen border on mismatch", isOn: $rule.edgeLine)
-                    Toggle("Cut the network on mismatch", isOn: $rule.killSwitch)
+                    Toggle("Red screen-edge line on mismatch", isOn: $rule.edgeLine)
+                    Toggle("Cut the network on mismatch", isOn: $rule.killSwitch).disabled(!m.settings.killSwitch)
                 } footer: {
-                    Footer("Cutting the network also needs the kill switch turned on in Protection.")
+                    if !m.settings.killSwitch { Footer("Cutting the network needs the kill switch, which is off. Turn it on in Protection.") }
                 }
             }
             .formStyle(.grouped)
@@ -389,7 +417,7 @@ struct ProtectionSettings: View {
                 }
                 Toggle(isOn: m.binding(\.confirmViolations)) {
                     Text("Confirm before blocking")
-                    Text("Require a second provider to agree — or the violation to repeat on the next check — before traffic is cut.")
+                    Text("Require a second provider, or the next check, to agree before traffic is cut.")
                 }
                 if m.kill.active {
                     LabeledContent {
@@ -399,12 +427,12 @@ struct ProtectionSettings: View {
                         Text(m.kill.reason ?? "Traffic is currently blocked by the kill switch.")
                     }
                 }
-                if m.kill.suppressed && !m.kill.active && m.settings.killSwitch {
+                if let at = m.kill.reblockAt, !m.kill.active, m.settings.killSwitch {
                     LabeledContent {
                         Button("Re-arm Now") { m.rearmKillSwitch() }
                     } label: {
-                        Text("Paused")
-                        Text("You unblocked the network by hand, so it stays off until your location is clear again — reconnect your VPN, or re-arm it now.")
+                        Text("Unblocked")
+                        Text("Reconnect your VPN: if your location still isn't allowed at \(at.formatted(date: .omitted, time: .shortened)), the kill switch blocks again. It re-arms sooner once everything is clear.")
                     }
                 }
                 if m.kill.needsSetup {
@@ -421,12 +449,12 @@ struct ProtectionSettings: View {
             } header: {
                 Text("Kill switch")
             } footer: {
-                Footer("Blocks internet traffic the moment a violation is detected, using firewall (pf) rules — the same approach a VPN's network lock uses.")
+                Footer("Blocks internet traffic the moment your location isn't allowed, using firewall (pf) rules — the same approach a VPN's network lock uses.")
             }
 
             if m.settings.killSwitch {
                 Section {
-                    Label("Armed — a violation immediately blocks all internet traffic, including VPN tunnels. Wi-Fi stays connected and your local network keeps working.",
+                    Label("Armed — a location that isn't allowed immediately blocks all internet traffic, including VPN tunnels. Wi-Fi stays connected and your local network keeps working.",
                           systemImage: "exclamationmark.shield.fill")
                         .foregroundStyle(.red)
                     VStack(alignment: .leading, spacing: 8) {

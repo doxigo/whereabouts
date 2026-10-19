@@ -44,7 +44,7 @@ func consistencyWarnings(location: Location?, onVpn: Bool, mac: MacFacts, settin
     return warnings
 }
 
-private func zoneName(_ zone: String) -> String { zone.replacingOccurrences(of: "_", with: " ") }
+func zoneName(_ zone: String) -> String { zone.replacingOccurrences(of: "_", with: " ") }
 
 /// The warnings worth a notification: ones that weren't showing last time.
 /// A failed lookup says nothing about the connection, so it forgets nothing —

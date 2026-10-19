@@ -2,6 +2,7 @@ import SwiftUI
 
 struct StatusView: View {
     @Environment(Monitor.self) private var m
+    @State private var showAllHistory = false
 
     var body: some View {
         Form {
@@ -27,9 +28,12 @@ struct StatusView: View {
 
     @ViewBuilder private var killSwitchBanners: some View {
         if m.kill.active {
+            // The hero or the active-site section usually says why already; repeat it only when neither does.
+            let reason = m.kill.reason.flatMap { $0 == m.geo.message || $0 == m.site.message ? nil : $0 }
             Section {
                 Banner(color: .red, icon: "xmark.shield.fill",
-                       text: "\(m.kill.reason ?? "A rule was violated.") Internet traffic is blocked at the firewall — your local network still works.") {
+                       text: [reason, "The kill switch is blocking internet traffic at the firewall — your local network still works."]
+                           .compactMap { $0 }.joined(separator: " ")) {
                     Button("Unblock Network") { Task { await m.restoreConnection() } }
                 }
             }
@@ -37,10 +41,18 @@ struct StatusView: View {
         if let error = m.kill.error {
             Section { Banner(color: .red, icon: "exclamationmark.octagon.fill", text: error) }
         }
-        if m.kill.suppressed && !m.kill.active && m.settings.killSwitch {
+        if let until = m.pausedUntil {
+            Section {
+                Banner(color: .orange, icon: "pause.circle.fill",
+                       text: "Paused until \(until.formatted(date: .omitted, time: .shortened)) — no alerts, and the kill switch won't block.") {
+                    Button("Resume") { m.resume() }
+                }
+            }
+        }
+        if let at = m.kill.reblockAt, !m.kill.active, m.settings.killSwitch {
             Section {
                 Banner(color: .orange, icon: "shield.slash",
-                       text: "Kill switch paused — you unblocked the network, so it won't cut traffic again until your location is back to normal.") {
+                       text: "You unblocked the network. Reconnect your VPN: if your location still isn't allowed at \(at.formatted(date: .omitted, time: .shortened)), the kill switch blocks again.") {
                     Button("Re-arm") { m.rearmKillSwitch() }
                 }
             }
@@ -52,9 +64,12 @@ struct StatusView: View {
         return VStack(spacing: 6) {
             Text(Countries.flag(loc?.countryCode)).font(.system(size: 52))
             Text(loc?.country ?? Countries.name(loc?.countryCode) ?? "—").font(.title2.bold())
-            StatusBadge(tone: m.geo.kind.tone, text: m.geo.kind.label)
+            StatusBadge(tone: m.geoBadge.tone, text: m.geoBadge.label)
             Text(m.geo.message).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            // Every open issue, so "Safe" never hides one; the details are in the sections below.
+            if m.geo.kind == .safe && !m.settings.hasLocationRules {
+                Button("Set Up Rules…") { (NSApp.delegate as? AppDelegate)?.showSettingsTab("Location") }
+            }
+            // Every open issue, so "Allowed" never hides one; the details are in the sections below.
             if m.leaking {
                 Label(m.leakHeadline, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
             }
@@ -102,7 +117,7 @@ struct StatusView: View {
             // The provider only says "looks like a proxy"; the name comes from the machine.
             LabeledContent("VPN / Proxy", value: m.geo.vpnName.map { "\(flag) · \($0)" } ?? flag)
             // Live: Match time zone changes it, and NSSystemTimeZoneDidChange refreshes it.
-            LabeledContent("Mac time zone", value: m.systemTimeZone.replacingOccurrences(of: "_", with: " "))
+            LabeledContent("Mac time zone", value: zoneName(m.systemTimeZone))
         }
         .textSelection(.enabled)
     }
@@ -155,16 +170,21 @@ struct StatusView: View {
             if m.history.isEmpty {
                 Text("Location changes will appear here.").foregroundStyle(.secondary)
             }
-            ForEach(m.history.prefix(10)) { entry in
+            ForEach(m.history.prefix(showAllHistory ? m.history.count : 10)) { entry in
                 HStack(spacing: 10) {
                     Text(Countries.flag(entry.countryCode)).font(.title3)
                     VStack(alignment: .leading) {
-                        Text(entry.country ?? Countries.name(entry.countryCode) ?? "Unknown")
-                        Text(entry.date.formatted(date: .numeric, time: .standard)).font(.caption).foregroundStyle(.tertiary)
+                        let country = entry.country ?? Countries.name(entry.countryCode) ?? "Unknown"
+                        Text(entry.city.map { "\($0), \(country)" } ?? country)
+                        Text([entry.date.formatted(date: .numeric, time: .standard), entry.isp].compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption).foregroundStyle(.tertiary)
                     }
                     Spacer()
                     StatusBadge(tone: entry.status.tone, text: entry.status.label)
                 }
+            }
+            if m.history.count > 10 {
+                Button(showAllHistory ? "Show Less" : "Show All \(m.history.count)") { showAllHistory.toggle() }.buttonStyle(.link)
             }
         } header: {
             HStack {
@@ -177,6 +197,13 @@ struct StatusView: View {
 }
 
 // MARK: - Labels & tones
+
+extension Monitor {
+    /// The verdict's badge. "Allowed" with no rule at all would read as protection, so it says so instead.
+    var geoBadge: (tone: Tone, label: String) {
+        geo.kind == .safe && !settings.hasLocationRules ? (.neutral, "No rules") : (geo.kind.tone, geo.kind.label)
+    }
+}
 
 extension GeoKind {
     var tone: Tone {
@@ -281,8 +308,8 @@ extension HistoryStatus {
 
     var label: String {
         switch self {
-        case .safe: "Safe"
-        case .violation: "Blocked"
+        case .safe: "Allowed"
+        case .violation: "Not allowed"
         case .unknown: "Unknown"
         }
     }

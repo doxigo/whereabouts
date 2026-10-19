@@ -95,6 +95,11 @@ struct AppSettings: Codable, Equatable {
     var warnTimeZone = true
     var warnAutomaticZone = true
     var warnRegion = true
+    /// Once a day, ask GitHub whether a newer release is out.
+    var checkUpdates = true
+
+    /// A country or provider rule. Without one, every location passes.
+    var hasLocationRules: Bool { !countries.isEmpty || (ispMode == .allowlist && !expectedIsps.isEmpty) }
 
     mutating func normalize() {
         countries = countries.map { $0.uppercased() }
@@ -154,6 +159,7 @@ extension AppSettings {
         warnTimeZone = c.get(.warnTimeZone, warnTimeZone)
         warnAutomaticZone = c.get(.warnAutomaticZone, warnAutomaticZone)
         warnRegion = c.get(.warnRegion, warnRegion)
+        checkUpdates = c.get(.checkUpdates, checkUpdates)
     }
 }
 
@@ -278,8 +284,10 @@ struct KillSwitchStatus {
     /// The setting is on but the installed helper is missing or outdated.
     var needsSetup = false
     var error: String?
-    /// Manually unblocked: armed, but standing down until every monitor is clear again.
-    var suppressed = false
+    /// Manually unblocked: standing down until then (or until every monitor is clear),
+    /// so the VPN can reconnect. At that time it blocks again if the location still isn't allowed.
+    var reblockAt: Date?
+    var suppressed: Bool { reblockAt != nil }
 }
 
 // MARK: - Countries

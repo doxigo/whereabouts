@@ -23,6 +23,9 @@ func selfTest() {
     s.ruleMode = .allowlist
     check(evaluateLocation(homeLoc, s).kind == .safe, "allowlist hit")
     check(evaluateLocation(exitLoc, s).reason == .country, "allowlist miss")
+    s.countries = []
+    check(evaluateLocation(exitLoc, s).kind == .safe, "empty allowlist is no rule yet")
+    s.countries = ["XA"]
     s.ruleMode = .blocklist
     s.ispMode = .allowlist
     s.expectedIsps = ["tunnel"]
@@ -33,6 +36,16 @@ func selfTest() {
     dropped.isp = nil
     check(evaluateLocation(dropped, s).kind == .safe, "unknown ISP is never a violation")
     check(evaluateLocation(Location(), s).kind == .unknown, "no country is unknown")
+
+    // Unblock window
+    let wrong = GeoStatus(kind: .violation, location: exitLoc, message: "geo", confirmed: true)
+    var unconfirmed = wrong
+    unconfirmed.confirmed = false
+    let siteRule = SiteRule(domain: "bank.example", locations: [], killSwitch: true)
+    check(reblockReason(wrong, SiteWatchStatus()) == "geo", "still not allowed blocks again")
+    check(reblockReason(unconfirmed, SiteWatchStatus()) == nil, "unconfirmed waits for the next check")
+    check(reblockReason(GeoStatus(kind: .unknown), SiteWatchStatus(state: .mismatch, rule: siteRule, message: "site")) == "site", "site rule that cuts blocks again")
+    check(reblockReason(GeoStatus(kind: .safe), SiteWatchStatus(state: .mismatch, rule: SiteRule(domain: "x", locations: []), message: "site")) == nil, "site rule without cut doesn't")
 
     // Settings normalization
     var n = AppSettings()

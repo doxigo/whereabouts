@@ -183,6 +183,6 @@ extension Monitor {
         guard key != leakAlertKey else { return }
         leakAlertKey = key
         log.warning("Leak detected: \(key)")
-        notify(leakHeadline, messages.joined(separator: " "), sound: true)
+        notify(leakHeadline, messages.joined(separator: " "), sound: true, topic: "leak")
     }
 }
