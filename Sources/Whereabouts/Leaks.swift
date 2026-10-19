@@ -56,6 +56,9 @@ func isPrivateAddress(_ address: String) -> Bool {
         || (a == 100 && (64...127).contains(b))
 }
 
+/// A resolver on this Mac itself: a DNS proxy (Cloudflare WARP, NextDNS, dnscrypt-proxy) that forwards queries on its own.
+func isLoopbackAddress(_ address: String) -> Bool { address == "::1" || address.hasPrefix("127.") }
+
 extension Monitor {
     func checkLeaks() async {
         guard !leakInFlight else { return }
@@ -141,6 +144,11 @@ extension Monitor {
             return DnsCheck(state: .ok, resolvers: resolvers, message: "DNS queries go through your VPN tunnel (\(list) via \(iface ?? "tunnel")).")
         }
         let primary = resolvers[0]
+        // Where a local proxy sends queries (usually encrypted, often through the tunnel) isn't in scutil.
+        if isLoopbackAddress(primary.address) {
+            return DnsCheck(state: .inconclusive, resolvers: resolvers,
+                            message: "DNS goes to a proxy on this Mac (\(list)), like the one Cloudflare WARP or NextDNS runs. It forwards queries itself, so Whereabouts can't see where they end up.")
+        }
         if primary.isPrivate {
             return vpnLikely
                 ? DnsCheck(state: .leak, resolvers: resolvers, message: "Your VPN is up but DNS goes to \(list) on \(iface ?? "your local network") — queries are resolved outside the tunnel.")

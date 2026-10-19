@@ -54,6 +54,13 @@ struct StatusView: View {
             Text(loc?.country ?? Countries.name(loc?.countryCode) ?? "—").font(.title2.bold())
             StatusBadge(tone: m.geo.kind.tone, text: m.geo.kind.label)
             Text(m.geo.message).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            // Every open issue, so "Safe" never hides one; the details are in the sections below.
+            if m.leaking {
+                Label(m.leakHeadline, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+            }
+            ForEach(m.consistency, id: \.kind) { w in
+                Label(w.title, systemImage: w.kind.symbol).font(.callout).foregroundStyle(.orange).help(w.detail)
+            }
             if let checked = m.geo.checkedAt {
                 TimelineView(.periodic(from: .now, by: 15)) { _ in
                     Text("Checked \(checked.formatted(.relative(presentation: .named)))")
@@ -111,7 +118,7 @@ struct StatusView: View {
                 leakRow("DNS resolvers", tone: m.leak.dns.state.tone, label: m.leak.dns.state.label,
                         message: m.leak.dns.message, isLeak: m.leak.dns.state == .leak,
                         details: m.leak.dns.resolvers.map {
-                            [$0.address, $0.iface, $0.country ?? ($0.isPrivate ? "local network" : nil)].compactMap { $0 }.joined(separator: " · ")
+                            [$0.address, $0.iface, $0.country ?? (isLoopbackAddress($0.address) ? "this Mac" : $0.isPrivate ? "local network" : nil)].compactMap { $0 }.joined(separator: " · ")
                         })
             }
         }

@@ -70,6 +70,7 @@ func selfTest() {
     check(isPrivateAddress("100.64.0.53"), "CGNAT resolver is private")
     check(isPrivateAddress("192.168.1.1") && isPrivateAddress("fd00::1"), "LAN addresses are private")
     check(!isPrivateAddress("8.8.8.8") && !isPrivateAddress("2001:4860:4860::8888"), "public addresses")
+    check(isLoopbackAddress("127.0.2.2") && isLoopbackAddress("::1") && !isLoopbackAddress("10.0.0.1"), "loopback resolvers are local proxies")
     let scutil = """
     DNS configuration
 
