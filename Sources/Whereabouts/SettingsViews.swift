@@ -177,8 +177,8 @@ struct LocationSettings: View {
     private var timeZone: some View {
         Section {
             Toggle(isOn: Binding(get: { m.settings.matchTimeZone }, set: { v in Task { await m.setMatchTimeZone(v) } })) {
-                Text("Match my Mac's time zone to my connection")
-                Text("While a VPN is up, the Mac uses the exit's time zone; otherwise your home zone. The menu bar clock keeps your home time.")
+                Text("Match my Mac's time zone and region to my connection")
+                Text("While a VPN is up, the Mac uses the exit's time zone and region; otherwise your home ones. The menu bar clock keeps your home time.")
             }
             // Fighting Location Services would flip the zone back and forth.
             .disabled(automaticZone && !m.settings.matchTimeZone)
@@ -198,14 +198,20 @@ struct LocationSettings: View {
                     m.update { $0.homeTimeZone = zone }
                 }
             }
+            LabeledContent("Home region") {
+                let home = m.settings.homeRegion ?? RegionPref.current
+                CountryPicker(title: home.map { "\(Countries.flag($0)) \(Countries.name($0) ?? $0)" } ?? "Choose…") { code in
+                    m.update { $0.homeRegion = code }
+                }
+            }
             LabeledContent("Mac is set to", value: zoneName(m.systemTimeZone))
             if let error = m.timeZoneError {
                 Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
             }
         } header: {
-            Text("Time zone")
+            Text("Time zone and region")
         } footer: {
-            Footer("While the Mac is on another zone, Calendar shows events in it unless you turn on Time Zone Override in Calendar settings. Reminders, alarms and scheduled jobs follow the new local time, Finder, Messages and logs show it too, and open browser tabs may need a reload.")
+            Footer("While the Mac is on another zone, Calendar shows events in it unless you turn on Time Zone Override in Calendar settings. Reminders, alarms and scheduled jobs follow the new local time, Finder, Messages and logs show it too, and open browser tabs may need a reload. The region also sets date, number and currency formats; your language stays.")
         }
     }
 
@@ -221,7 +227,7 @@ struct LocationSettings: View {
             }
             Toggle(isOn: m.binding(\.warnRegion)) {
                 Text("Region")
-                Text("Mention when the Mac's region differs from the connection's country.")
+                Text("Mention when the Mac's region differs from the connection's country and matching is off.")
             }
         } header: {
             Text("Consistency warnings")

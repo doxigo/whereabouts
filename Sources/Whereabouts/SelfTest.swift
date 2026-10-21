@@ -167,11 +167,17 @@ func selfTest() {
     var w = AppSettings()
     w.matchTimeZone = true
     check(kinds(auto, w, vpn: false) == [.automaticZone], "automatic zone blocks Match time zone")
-    check(kinds(home, w) == [.region], "working Match time zone handles the zone")
-    check(kinds(home, w, failing: true) == [.timeZone, .region], "failing Match time zone warns")
+    check(kinds(home, w).isEmpty, "working Match handles the zone and region")
+    check(kinds(home, w, failing: true) == [.timeZone], "failing Match time zone warns; the region needs no helper")
     var homeAuto = home
     homeAuto.automaticZone = true
-    check(kinds(homeAuto, w) == [.timeZone, .automaticZone, .region], "automatic zone defeats Match time zone")
+    check(kinds(homeAuto, w) == [.timeZone, .automaticZone], "automatic zone defeats Match time zone")
+    // Region: only the rg override moves; language and other keywords stay.
+    check(regionLocale("en_US@rg=nozzzz", "SE") == "en_US@rg=sezzzz", "region override replaced")
+    check(regionLocale("en_US@rg=sezzzz", "US") == "en_US", "home region matching the language drops the override")
+    check(regionLocale("en_SE", "NO") == "en_SE@rg=nozzzz", "region override added")
+    check(regionLocale("en_US@calendar=gregorian;rg=nozzzz", "SE") == "en_US@calendar=gregorian;rg=sezzzz", "other keywords kept")
+    check(Locale(identifier: regionLocale("fa_IR", "DE")).region?.identifier == "DE", "result reads back as the new region")
     w = AppSettings()
     w.warnTimeZone = false; w.warnAutomaticZone = false; w.warnRegion = false
     check(kinds(homeAuto, w).isEmpty, "each warning can be turned off")

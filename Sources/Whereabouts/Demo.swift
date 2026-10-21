@@ -29,6 +29,7 @@ enum Demo {
         s.siteRules = [SiteRule(domain: "bank.example", locations: [SiteLocation(countryCode: "PT", country: "Portugal", city: "Lisbon")])]
         s.killSwitch = true
         s.homeTimeZone = "Europe/Lisbon"
+        s.homeRegion = "PT"
         // The warnings compare against this Mac's real region and zone; keep those out of screenshots.
         s.warnTimeZone = false
         s.warnAutomaticZone = false

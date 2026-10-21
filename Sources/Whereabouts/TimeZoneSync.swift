@@ -3,7 +3,8 @@ import Foundation
 // Match the Mac's time zone to the connection: while a VPN is up the system zone
 // follows the exit (so nothing on the Mac contradicts the IP), otherwise it goes
 // home. Changing the zone needs root, so a one-time admin prompt installs a
-// helper that accepts nothing but a valid zone name.
+// helper that accepts nothing but a valid zone name. The region follows along;
+// it's a per-user preference, so it needs no helper.
 
 enum TimeZoneHelper {
     static let helperPath = "\(Privileged.appDir)/timezone-helper.sh"
@@ -62,6 +63,33 @@ enum TimeZoneHelper {
     }()
 }
 
+/// The Mac's region (System Settings › General › Language & Region). Only the
+/// region changes; the language and any format overrides stay as they are.
+enum RegionPref {
+    private static var locale: String {
+        CFPreferencesCopyAppValue("AppleLocale" as CFString, kCFPreferencesAnyApplication) as? String ?? Locale.current.identifier
+    }
+
+    static var current: String? { Locale(identifier: locale).region?.identifier }
+
+    static func set(_ code: String) -> Bool {
+        let (any, user, host) = (kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        CFPreferencesSetValue("AppleLocale" as CFString, regionLocale(locale, code) as CFString, any, user, host)
+        guard CFPreferencesSynchronize(any, user, host) else { return false }
+        // Running apps re-read the locale on this; without it they keep the old region until relaunched.
+        DistributedNotificationCenter.default().postNotificationName(.init("AppleLanguagePreferencesChangedNotification"),
+                                                                     object: nil, userInfo: nil, deliverImmediately: true)
+        return true
+    }
+}
+
+/// `identifier` with its region set to `code`: the rg override, dropped when the language already says it.
+func regionLocale(_ identifier: String, _ code: String) -> String {
+    var c = Locale.Components(identifier: identifier)
+    c.region = c.languageComponents.region?.identifier == code ? nil : Locale.Region(code)
+    return Locale(components: c).identifier
+}
+
 extension Monitor {
     func refreshSystemTimeZone() {
         NSTimeZone.resetSystemTimeZone()
@@ -77,6 +105,7 @@ extension Monitor {
             update { $0.matchTimeZone = false }
             // Go home silently first, so canceling the removal prompt still leaves the right zone.
             if let home = settings.homeTimeZone, home != systemTimeZone { try? await TimeZoneHelper.set(home) }
+            if let home = settings.homeRegion, home != RegionPref.current { _ = RegionPref.set(home) }
             refreshSystemTimeZone()
             timeZoneError = nil
             do {
@@ -104,15 +133,15 @@ extension Monitor {
         update { $0.matchTimeZone = true; $0.homeTimeZone = home }
     }
 
-    /// Point the Mac at the zone the current connection calls for, if it isn't already.
+    /// Point the Mac at the zone and region the current connection calls for, if it isn't already.
     func syncTimeZone() async {
-        guard settings.matchTimeZone, let home = settings.homeTimeZone, !timeZoneInFlight,
-              geo.kind == .safe || geo.kind == .violation, let location = geo.location,
-              !TimeZoneHelper.automaticIsOn else { return }
+        guard settings.matchTimeZone, geo.kind == .safe || geo.kind == .violation, let location = geo.location else { return }
         // On a VPN, follow the exit. Off it, IP geolocation is only approximate,
         // so the real answer is home.
         let onVpn = geo.vpnName != nil || location.isVpn == true
-        guard let target = onVpn ? location.timeZone : home, TimeZone(identifier: target) != nil else { return }
+        syncRegion(onVpn: onVpn, exit: location.countryCode)
+        guard let home = settings.homeTimeZone, !timeZoneInFlight, !TimeZoneHelper.automaticIsOn,
+              let target = onVpn ? location.timeZone : home, TimeZone(identifier: target) != nil else { return }
         refreshSystemTimeZone()
         guard target != systemTimeZone else { return }
 
@@ -129,5 +158,17 @@ extension Monitor {
             timeZoneError = "Couldn't change the time zone — the helper may be missing. Turn the setting off and on again to reinstall it."
             log.error("Time zone change failed: \(error.localizedDescription)")
         }
+    }
+
+    private func syncRegion(onVpn: Bool, exit: String?) {
+        guard let current = RegionPref.current else { return }
+        // The region in use the first time this runs is home, as with the zone.
+        let home = settings.homeRegion ?? current
+        if settings.homeRegion == nil { update { $0.homeRegion = home } }
+        guard let target = onVpn ? exit : home, target != current else { return }
+        let name = Countries.name(target) ?? target
+        guard RegionPref.set(target) else { log.error("Region change failed"); return }
+        notify("Region changed", target == home ? "Mac region set back to your home region, \(name)."
+            : "Mac region set to \(name) to match your connection.")
     }
 }

@@ -37,9 +37,10 @@ func consistencyWarnings(location: Location?, onVpn: Bool, mac: MacFacts, settin
         warnings.append(ConsistencyWarning(kind: .automaticZone, title: "Automatic time zone is on",
                                            detail: "macOS sets the zone from your real location, undoing any match, and Match time zone stays unavailable.\nTurn it off in System Settings › General › Date & Time."))
     }
-    if s.warnRegion, onVpn, let code = location?.countryCode, let region = mac.region, region.uppercased() != code.uppercased() {
+    // Matching sets the region in the same check, and needs nothing that can get stuck.
+    if s.warnRegion, onVpn, !s.matchTimeZone, let code = location?.countryCode, let region = mac.region, region.uppercased() != code.uppercased() {
         warnings.append(ConsistencyWarning(kind: .region, title: "Mac region differs from your connection",
-                                           detail: "Region is \(Countries.name(region) ?? region), your connection is in \(location?.place ?? code). Alibi covers your browser's language; apps can still read the region.\nChange it in System Settings › General › Language & Region if that matters."))
+                                           detail: "Region is \(Countries.name(region) ?? region), your connection is in \(location?.place ?? code). Alibi covers your browser's language; apps can still read the region.\nTurn on Match time zone and region in Settings › Location."))
     }
     return warnings
 }
@@ -57,13 +58,9 @@ func newWarnings(_ current: [ConsistencyWarning], announced: inout Set<Consisten
 extension ConsistencyKind {
     var symbol: String { self == .region ? "info.circle" : "exclamationmark.triangle" }
     /// Where the fix lives: a Whereabouts Settings tab or a System Settings pane.
-    var settingsTab: String? { self == .timeZone ? "Location" : nil }
+    var settingsTab: String? { self == .automaticZone ? nil : "Location" }
     var systemPane: URL? {
-        switch self {
-        case .timeZone: nil
-        case .automaticZone: URL(string: "x-apple.systempreferences:com.apple.Date-Time-Settings.extension")
-        case .region: URL(string: "x-apple.systempreferences:com.apple.Localization-Settings.extension")
-        }
+        self == .automaticZone ? URL(string: "x-apple.systempreferences:com.apple.Date-Time-Settings.extension") : nil
     }
 }
 

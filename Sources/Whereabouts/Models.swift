@@ -87,10 +87,12 @@ struct AppSettings: Codable, Equatable {
     var confirmViolations = true
     var ipv6Check = true
     var dnsCheck = true
-    /// Set the Mac's time zone to the connection's while a VPN is up.
+    /// Set the Mac's time zone and region to the connection's while a VPN is up.
     var matchTimeZone = false
     /// Where the Mac goes back to; captured when matching is first turned on.
     var homeTimeZone: String?
+    /// The region (country code) to go back to; captured the first time matching runs.
+    var homeRegion: String?
     /// Consistency warnings: the Mac telling a different story than the connection.
     var warnTimeZone = true
     var warnAutomaticZone = true
@@ -156,6 +158,7 @@ extension AppSettings {
         dnsCheck = c.get(.dnsCheck, dnsCheck)
         matchTimeZone = c.get(.matchTimeZone, matchTimeZone)
         homeTimeZone = c.get(.homeTimeZone, homeTimeZone)
+        homeRegion = c.get(.homeRegion, homeRegion)
         warnTimeZone = c.get(.warnTimeZone, warnTimeZone)
         warnAutomaticZone = c.get(.warnAutomaticZone, warnAutomaticZone)
         warnRegion = c.get(.warnRegion, warnRegion)

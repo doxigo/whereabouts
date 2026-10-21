@@ -30,7 +30,7 @@ The screenshots use made-up data from the app's demo mode (`--demo`). `Branding/
 - **Leak checks.** It also checks the quieter ways a location leaks: the IPv6 exit and the DNS resolvers. A leak sends a notification, but it never engages the kill switch.
 - **Alerts.** Choose how a wrong location reaches you: a colored menu-bar item, a notification, a sound, a red line along the top of every screen. Turning the VPN off on purpose? **Pause for 1 Hour** in the menu holds the alerts and the kill switch.
 - **Kill switch.** Cuts internet traffic on a country or ISP violation, or on a per-site rule that asks for it. If you unblock by hand, you get two minutes to reconnect your VPN: if the location still isn't allowed then, it blocks again. It re-arms sooner once every check is clear. With **Confirm before blocking** on, a second lookup provider cross-checks each violation. If the two disagree, the kill switch waits for the next check to agree.
-- **Time zone and home clock.** Optionally moves the Mac to the VPN exit's time zone, so nothing on the Mac contradicts the IP. The menu-bar clock keeps showing your home time either way. No app can remove the macOS clock, so a setting shrinks it to its small analog face instead.
+- **Time zone, region and home clock.** Optionally moves the Mac to the VPN exit's time zone and region, so nothing on the Mac contradicts the IP, and back home when the VPN drops. The menu-bar clock keeps showing your home time either way. No app can remove the macOS clock, so a setting shrinks it to its small analog face instead.
 - **History.** Past lookups are kept, so you can see where this Mac has been seen.
 
 ### How the kill switch works

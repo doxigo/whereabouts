@@ -126,7 +126,7 @@ final class Monitor {
             Task { await checkSite() }
         }
         if interval || old.ipv6Check != next.ipv6Check || old.dnsCheck != next.dnsCheck { startLeakLoop() }
-        if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone) {
+        if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion) {
             Task { await syncTimeZone() }
         }
         if old.checkUpdates != next.checkUpdates { Task { await checkForUpdate() } }
