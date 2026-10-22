@@ -6,8 +6,14 @@ enum RuleMode: String, Codable, CaseIterable { case blocklist, allowlist }
 enum IspMode: String, Codable { case off, allowlist }
 
 enum MenuBarDisplay: String, Codable, CaseIterable {
-    case code, name, city, flag, full
-    var label: String { rawValue.capitalized }
+    case code, name, city, cityCountry, cityCode, flag, full
+    var label: String {
+        switch self {
+        case .cityCountry: return "City and country"
+        case .cityCode: return "City and country code"
+        default: return rawValue.capitalized
+        }
+    }
 }
 
 /// The menu-bar clock always shows home time; `away` shows it only while the Mac is on another zone.

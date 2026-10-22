@@ -125,6 +125,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         case .code: return " \(code)"
         case .name: return " \(loc.country ?? code)"
         case .city: return " \(loc.city ?? code)"
+        case .cityCountry: return " \(loc.cityPlace)"
+        case .cityCode: return " \(loc.city.map { "\($0), \(code)" } ?? code)"
         case .flag: return " \(Countries.flag(code))"
         case .full: return " \(Countries.flag(code)) \(loc.cityPlace)"
         }
