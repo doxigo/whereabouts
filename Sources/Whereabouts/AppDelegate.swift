@@ -181,8 +181,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             if #available(macOS 14.4, *) { item.subtitle = detail } else { item.toolTip = detail }
             menu.addItem(item)
         }
-        if let release = m.latestRelease {
-            menu.addItem(action("Update Available: \(release.version)…", "arrow.down.circle") { NSWorkspace.shared.open(release.url) })
+        if m.installingUpdate {
+            menu.addItem(disabled: "Installing Update…")
+        } else if let release = m.latestRelease {
+            // If it can't install in place, the release page has the disk image.
+            let item = action("Update to \(release.version)", "arrow.down.circle") {
+                Task { if !(await m.installUpdate()) { NSWorkspace.shared.open(release.page) } }
+            }
+            let detail = "Installs the new version and restarts Whereabouts"
+            if #available(macOS 14.4, *) { item.subtitle = detail } else { item.toolTip = detail }
+            menu.addItem(item)
         }
         menu.addItem(.separator())
         menu.addItem(action("Settings…", "gearshape", key: ",") { [weak self] in self?.openSettings() })

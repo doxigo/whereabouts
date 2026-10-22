@@ -51,6 +51,11 @@ struct GeneralSettings: View {
                     Text("Check for updates")
                     Text("Once a day, ask GitHub whether a newer release is out. A new version shows in the menu.")
                 }
+                Toggle(isOn: m.binding(\.installUpdates)) {
+                    Text("Install updates automatically")
+                    Text("Download the new version and restart with it, once you've switched to another app.")
+                }
+                .disabled(!m.settings.checkUpdates)
             }
 
             Section("Alerts") {

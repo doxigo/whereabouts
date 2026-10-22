@@ -41,7 +41,7 @@ It loads block rules into the macOS packet filter (`pf`), in the anchor `com.app
 
 ### Where lookups go
 
-Location lookups go to [ip-api.com](https://ip-api.com) on its free HTTP tier, the one provider that flags VPN and proxy exits, with [ipwho.is](https://ipwho.is) as a fallback. The IPv6 exit is read from `api6.ipify.org` or `ipv6.icanhazip.com`. With **Check for updates** on (Settings › General), it asks `api.github.com` once a day for the latest release.
+Location lookups go to [ip-api.com](https://ip-api.com) on its free HTTP tier, the one provider that flags VPN and proxy exits, with [ipwho.is](https://ipwho.is) as a fallback. The IPv6 exit is read from `api6.ipify.org` or `ipv6.icanhazip.com`. With **Check for updates** on (Settings › General), it asks `api.github.com` once a day for the latest release; with **Install updates automatically** also on, it downloads that release's disk image from GitHub and restarts with it.
 
 ## Reading the menu-bar glyph
 

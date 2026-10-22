@@ -19,7 +19,8 @@ final class Monitor {
     private(set) var history: [HistoryEntry]
     private(set) var isCheckingAll = false
     /// A newer GitHub release than this build, if update checks are on.
-    private(set) var latestRelease: (version: String, url: URL)?
+    private(set) var latestRelease: Release?
+    private(set) var installingUpdate = false
     /// Alerts and the kill switch stand down until then, for turning the VPN off on purpose.
     private(set) var pausedUntil: Date?
     var systemTimeZone = TimeZone.current.identifier
@@ -129,7 +130,7 @@ final class Monitor {
         if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion) {
             Task { await syncTimeZone() }
         }
-        if old.checkUpdates != next.checkUpdates { Task { await checkForUpdate() } }
+        if old.checkUpdates != next.checkUpdates || old.installUpdates != next.installUpdates { Task { await checkForUpdate() } }
     }
 
     private func syncLoginItem() {
@@ -174,12 +175,31 @@ final class Monitor {
 
     func checkForUpdate() async {
         guard settings.checkUpdates else { latestRelease = nil; return }
-        guard let release = try? await fetchJSON("https://api.github.com/repos/doxigo/whereabouts/releases/latest"),
-              let tag = release["tag_name"] as? String,
-              let url = (release["html_url"] as? String).flatMap(URL.init(string:)) else { return }
-        let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        guard let json = try? await fetchJSON("https://api.github.com/repos/doxigo/whereabouts/releases/latest") else { return }
         let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-        latestRelease = latest.compare(current, options: .numeric) == .orderedDescending ? (latest, url) : nil
+        latestRelease = newerRelease(json, than: current)
+        guard latestRelease != nil, settings.installUpdates else { return }
+        // Never restart under the user's hands: wait until they're in another app.
+        while NSApp.isActive { try? await Task.sleep(for: .seconds(60)) }
+        if settings.checkUpdates && settings.installUpdates { await installUpdate() }
+    }
+
+    /// Installs `latestRelease` and quits so the new copy opens. False if it couldn't,
+    /// with this copy still in place.
+    @discardableResult
+    func installUpdate() async -> Bool {
+        guard let release = latestRelease, !installingUpdate else { return false }
+        installingUpdate = true
+        defer { installingUpdate = false }
+        do {
+            try await installRelease(release)
+        } catch {
+            log.error("Update to \(release.version) failed: \(error.localizedDescription)")
+            return false
+        }
+        log.info("Updated to \(release.version) — relaunching")
+        NSApp.terminate(nil)
+        return true
     }
 
     // MARK: Loops

@@ -99,6 +99,8 @@ struct AppSettings: Codable, Equatable {
     var warnRegion = true
     /// Once a day, ask GitHub whether a newer release is out.
     var checkUpdates = true
+    /// Install a newer release found by that check, then relaunch.
+    var installUpdates = true
 
     /// A country or provider rule. Without one, every location passes.
     var hasLocationRules: Bool { !countries.isEmpty || (ispMode == .allowlist && !expectedIsps.isEmpty) }
@@ -163,6 +165,7 @@ extension AppSettings {
         warnAutomaticZone = c.get(.warnAutomaticZone, warnAutomaticZone)
         warnRegion = c.get(.warnRegion, warnRegion)
         checkUpdates = c.get(.checkUpdates, checkUpdates)
+        installUpdates = c.get(.installUpdates, installUpdates)
     }
 }
 

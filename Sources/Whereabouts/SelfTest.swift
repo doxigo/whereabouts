@@ -222,6 +222,15 @@ func selfTest() {
 
     check(Countries.flag("XA") == "\u{1F1FD}\u{1F1E6}" && Countries.flag(nil) == "🏳️" && Countries.flag("1A") == "🏳️", "flags")
 
+    // Updates
+    let release: [String: Any] = ["tag_name": "v1.10.0", "html_url": "https://example.com/release", "assets": [
+        ["name": "notes.txt", "browser_download_url": "https://example.com/notes.txt"],
+        ["name": "Whereabouts-1.10.0.dmg", "browser_download_url": "https://example.com/app.dmg"],
+    ]]
+    check(newerRelease(release, than: "1.9.2")?.dmg?.absoluteString == "https://example.com/app.dmg", "newer release picks the disk image")
+    check(newerRelease(release, than: "1.10.0") == nil, "same version isn't an update")
+    check(newerRelease(["tag_name": "v2.0.0", "html_url": "https://example.com/r"], than: "1.0")?.dmg == nil, "release without a disk image")
+
     print(failures == 0 ? "selftest: all passed" : "selftest: \(failures) failed")
     exit(failures == 0 ? 0 : 1)
 }
