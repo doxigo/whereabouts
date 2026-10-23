@@ -21,6 +21,8 @@ final class Monitor {
     /// A newer GitHub release than this build, if update checks are on.
     private(set) var latestRelease: Release?
     private(set) var installingUpdate = false
+    /// When GitHub last answered an update check.
+    private(set) var lastUpdateCheck: Date?
     /// Alerts and the kill switch stand down until then, for turning the VPN off on purpose.
     private(set) var pausedUntil: Date?
     var systemTimeZone = TimeZone.current.identifier
@@ -51,10 +53,12 @@ final class Monitor {
     @ObservationIgnored private var unknownStreak = 0
     /// A violation the cross-check disputed: the kill switch waits one more check.
     @ObservationIgnored private var killDeferred = false
-    @ObservationIgnored private var geoTask: Task<Void, Never>?
-    @ObservationIgnored private var reachTask: Task<Void, Never>?
+    /// The browser whose tab couldn't be read, and that result, so the site watch doesn't ask again right away.
+    @ObservationIgnored var unreadableTab: (pid: pid_t, at: Date, status: SiteWatchStatus)?
+    @ObservationIgnored private var vpnLookup: (interfaces: [String], name: String?)?
+    @ObservationIgnored private var checkCount = 0
+    @ObservationIgnored private var checkTask: Task<Void, Never>?
     @ObservationIgnored private var siteTask: Task<Void, Never>?
-    @ObservationIgnored private var leakTask: Task<Void, Never>?
     @ObservationIgnored private var wakeTask: Task<Void, Never>?
     @ObservationIgnored private var pauseTask: Task<Void, Never>?
     @ObservationIgnored var reblockTask: Task<Void, Never>?
@@ -82,10 +86,8 @@ final class Monitor {
         syncLoginItem()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         Task { await refreshKillSwitchState() }
-        startGeoLoop()
-        startReachLoop()
+        startChecks()
         siteTask = loop(every: 5) { await $0.checkSite() }
-        startLeakLoop()
         startNetworkWatch()
         _ = loop(every: 86_400, delay: 30) { await $0.checkForUpdate() }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -93,6 +95,13 @@ final class Monitor {
         }
         NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshSystemTimeZone() }
+        }
+        // A new frontmost app gets its tab read now, not at the next poll.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.unreadableTab = nil
+                Task { await self?.checkSite() }
+            }
         }
     }
 
@@ -112,24 +121,26 @@ final class Monitor {
         if Demo.enabled { return }
         Store.save(next)
 
-        // Restart only what the change affects — every geo restart is a provider call.
+        // Re-run only what the change affects — every geo check is a provider call.
+        // A new interval restarts the timer, which runs every check at once.
         let interval = old.intervalMs != next.intervalMs
         if old.launchAtLogin != next.launchAtLogin { syncLoginItem() }
-        if interval || old.ruleMode != next.ruleMode || old.countries != next.countries
-            || old.ispMode != next.ispMode || old.expectedIsps != next.expectedIsps {
-            startGeoLoop()
+        if interval { startChecks() }
+        if !interval && (old.ruleMode != next.ruleMode || old.countries != next.countries
+            || old.ispMode != next.ispMode || old.expectedIsps != next.expectedIsps) {
+            Task { await checkGeo() }
         }
         if old.domains != next.domains {
             // Show the edit now: a probe still in flight holds the old list for up to 8 s,
             // which made a removed host look impossible to remove.
             let hosts = next.domains.compactMap(normalizeDomain)
             reach = hosts.map { host in reach.first { $0.host == host } ?? ReachResult(host: host) }
+            if !interval { Task { await checkReach() } }
         }
-        if interval || old.domains != next.domains { startReachLoop() }
         if old.browserWatch != next.browserWatch || old.siteRules != next.siteRules {
             Task { await checkSite() }
         }
-        if interval || old.ipv6Check != next.ipv6Check || old.dnsCheck != next.dnsCheck { startLeakLoop() }
+        if !interval && (old.ipv6Check != next.ipv6Check || old.dnsCheck != next.dnsCheck) { Task { await checkLeaks() } }
         if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion) {
             Task { await syncTimeZone() }
         }
@@ -178,13 +189,19 @@ final class Monitor {
 
     func checkForUpdate() async {
         guard settings.checkUpdates else { latestRelease = nil; return }
-        guard let json = try? await fetchJSON("https://api.github.com/repos/doxigo/whereabouts/releases/latest") else { return }
-        let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-        latestRelease = newerRelease(json, than: current)
-        guard latestRelease != nil, settings.installUpdates else { return }
+        guard await fetchLatestRelease(), latestRelease != nil, settings.installUpdates else { return }
         // Never restart under the user's hands: wait until they're in another app.
         while NSApp.isActive { try? await Task.sleep(for: .seconds(60)) }
         if settings.checkUpdates && settings.installUpdates { await installUpdate() }
+    }
+
+    /// Asks GitHub for the latest release, without installing it. False if GitHub couldn't be reached.
+    @discardableResult
+    func fetchLatestRelease() async -> Bool {
+        guard let json = try? await fetchJSON("https://api.github.com/repos/doxigo/whereabouts/releases/latest") else { return false }
+        latestRelease = newerRelease(json, than: appVersion)
+        lastUpdateCheck = Date()
+        return true
     }
 
     /// Installs `latestRelease` and quits so the new copy opens. False if it couldn't,
@@ -220,14 +237,22 @@ final class Monitor {
 
     private var intervalSeconds: Double { Double(settings.intervalMs) / 1000 }
 
-    private func startGeoLoop() {
-        geoTask?.cancel()
-        geoTask = loop(every: intervalSeconds) { _ = await $0.checkGeo() }
+    /// One timer for every network check, so the radio wakes once per interval instead of once per check.
+    private func startChecks() {
+        checkTask?.cancel()
+        checkCount = 0
+        checkTask = loop(every: intervalSeconds) { await $0.runChecks() }
     }
 
-    private func startReachLoop() {
-        reachTask?.cancel()
-        reachTask = loop(every: intervalSeconds) { await $0.checkReach() }
+    private func runChecks() async {
+        // The leak checks compare against the IPv4 exit, so refresh that first.
+        _ = await checkGeo()
+        // Leak checks at most once a minute, whatever the interval.
+        let leaksDue = checkCount % max(1, Int((60 / intervalSeconds).rounded(.up))) == 0
+        checkCount += 1
+        async let r: Void = checkReach()
+        if leaksDue { await checkLeaks() }
+        await r
     }
 
     func checkAll() async {
@@ -321,7 +346,10 @@ final class Monitor {
         var status: GeoStatus
         if let (location, source) = await lookupLocation() {
             let verdict = evaluateLocation(location, settings)
-            let vpnName = await activeVpnName()
+            // Naming the VPN takes a process or two, and the answer only changes with the interfaces.
+            let interfaces = ipv4InterfaceNames()
+            if vpnLookup?.interfaces != interfaces { vpnLookup = (interfaces, await activeVpnName()) }
+            let vpnName = vpnLookup?.name
             // A single bad provider response must not be able to cut the network.
             var confirmed: Bool?
             if verdict.kind == .violation, let reason = verdict.reason, settings.confirmViolations {
@@ -461,20 +489,6 @@ final class Monitor {
             if result.status == .blocked { notify("Host unreachable", "\(result.host) is now blocked or unreachable.", topic: "reach|\(result.host)") }
             if result.status == .reachable { notify("Host reachable", "\(result.host) is reachable again.", topic: "reach|\(result.host)") }
         }
-    }
-
-    // MARK: Leak loop
-
-    private func startLeakLoop() {
-        leakTask?.cancel()
-        guard settings.ipv6Check || settings.dnsCheck else {
-            leak = LeakStatus(ipv6: Ipv6Check(state: .off, message: "IPv6 leak check is off."),
-                              dns: DnsCheck(state: .off, message: "DNS leak check is off."))
-            leakAlertKey = nil
-            return
-        }
-        // A short head start lets the first IPv4 result land as the baseline.
-        leakTask = loop(every: max(intervalSeconds, 60), delay: 4) { await $0.checkLeaks() }
     }
 }
 

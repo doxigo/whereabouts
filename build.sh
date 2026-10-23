@@ -22,6 +22,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Whereabouts "$APP/Contents/MacOS/"
 cp Resources/Info.plist "$APP/Contents/"
+# The newest release tag, so the updater doesn't swap a local build for that release, even when
+# this checkout is behind it (git describe would name an older tag).
+tag=$(git tag --list 'v*' --sort=-v:refname 2>/dev/null | head -1)
+if [ -n "$tag" ]; then
+  plutil -replace CFBundleShortVersionString -string "${tag#v}" "$APP/Contents/Info.plist"
+fi
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 codesign --force --sign "$SIGN_ID" "$APP"
 echo "Built $APP (signed: $SIGN_ID)"

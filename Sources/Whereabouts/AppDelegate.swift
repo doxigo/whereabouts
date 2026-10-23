@@ -3,7 +3,7 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
     let monitor = Monitor()
     private var statusItem: NSStatusItem!
     private var statusWindow: NSWindow?
@@ -140,6 +140,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         return clockText(monitor.settings.menuBarClock, home: homeClockZone(monitor.settings, mac: mac), mac: mac, at: Date())
     }
 
+    /// The status window's essentials, one line each: exit, VPN, leak checks, Mac time zone.
+    private func shortStatus() -> [String] {
+        let m = monitor, loc = m.geo.location
+        let exit = [loc?.ip, loc?.isp].compactMap { $0 }.joined(separator: " · ")
+        let vpn = m.geo.vpnName.map { "VPN: \($0)" } ?? loc?.isVpn.map { $0 ? "VPN detected" : "No VPN detected" }
+        let checks = [m.leak.dns.state == .off ? nil : "DNS: \(m.leak.dns.state.label)",
+                      m.leak.ipv6.state == .off ? nil : "IPv6: \(m.leak.ipv6.state.label)"]
+            .compactMap { $0 }.joined(separator: " · ")
+        return [exit, vpn ?? "", checks, "Mac time zone: \(zoneName(m.systemTimeZone))"].filter { !$0.isEmpty }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         let m = monitor
         menu.removeAllItems()
@@ -149,7 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             glyph: StampGlyph.image(mark, color: color),
             title: m.kill.active ? "Internet blocked" : m.geo.kind == .offline ? "No connection" : m.geo.location?.cityPlace ?? "Location unknown",
             detail: m.kill.active ? "Kill switch engaged" : m.geoBadge.label + checked,
-            warning: m.leaking ? m.leakHeadline : nil)))
+            warning: m.leaking ? m.leakHeadline : nil,
+            status: m.kill.active ? [] : shortStatus())))
 
         let warnings = m.consistency
         if !warnings.isEmpty {
@@ -266,6 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             window.setContentSize(NSSize(width: 440, height: 640))
             window.contentMinSize = NSSize(width: 390, height: 480)
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.center()
             if !Demo.enabled { window.setFrameAutosaveName("StatusWindow") }
             statusWindow = window
@@ -290,13 +303,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             tab("Location", "globe", LocationSettings())
             tab("Sites", "safari", SiteSettings())
             tab("Protection", "lock.shield", ProtectionSettings())
+            tab("About", "info.circle", AboutSettings())
             let window = NSWindow(contentViewController: tabs)
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.center()
             settingsWindow = window
         }
         present(settingsWindow!)
+    }
+
+    /// Frees a closed window and its SwiftUI views; the next open builds them again.
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        if window === statusWindow { statusWindow = nil }
+        if window === settingsWindow { settingsWindow = nil }
     }
 
     func showSettingsTab(_ tab: String) {
@@ -347,6 +369,7 @@ private struct MenuHeader: View {
     let title: String
     let detail: String
     let warning: String?
+    let status: [String]
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -355,6 +378,11 @@ private struct MenuHeader: View {
                 Text(title).font(.system(size: 13, weight: .semibold))
                 Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
                 if let warning { Text(warning).font(.system(size: 11)).foregroundStyle(.orange) }
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(status, id: \.self) { Text($0) }
+                }
+                .font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary)
+                .padding(.top, status.isEmpty ? 0 : 3)
             }
         }
         .padding(.horizontal, 14)

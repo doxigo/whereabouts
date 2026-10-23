@@ -56,6 +56,16 @@ func isPrivateAddress(_ address: String) -> Bool {
         || (a == 100 && (64...127).contains(b))
 }
 
+/// The address a lookup reaches the internet from, from `dig +short txt o-o.myaddr.l.google.com`:
+/// the client subnet a resolver passes on (ECS) if any, else the resolver's own address.
+func dnsEgress(_ digOutput: String) -> String? {
+    let values = digOutput.split(separator: "\n").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) }
+    if let ecs = values.first(where: { $0.hasPrefix("edns0-client-subnet ") }) {
+        return ecs.dropFirst("edns0-client-subnet ".count).split(separator: "/").first.map(String.init)
+    }
+    return values.first { !$0.isEmpty && !$0.hasPrefix(";") }
+}
+
 /// A resolver on this Mac itself: a DNS proxy (Cloudflare WARP, NextDNS, dnscrypt-proxy) that forwards queries on its own.
 func isLoopbackAddress(_ address: String) -> Bool { address == "::1" || address.hasPrefix("127.") }
 
@@ -127,8 +137,8 @@ extension Monitor {
         var resolvers = block.nameservers.prefix(3).map {
             DnsResolver(address: $0, iface: iface, isPrivate: isPrivateAddress($0))
         }
-        // Only public addresses geolocate, and the first two answer the question.
-        for i in resolvers.indices.filter({ !resolvers[$0].isPrivate }).prefix(2) {
+        // Only public addresses geolocate (anycast ones only to their registry), and the first two answer the question.
+        for i in resolvers.indices.filter({ !resolvers[$0].isPrivate && !globalResolvers.contains(resolvers[$0].address.lowercased()) }).prefix(2) {
             guard let l = await geolocate(resolvers[i].address) else { continue }
             resolvers[i].country = l.country
             resolvers[i].countryCode = l.countryCode
@@ -142,6 +152,14 @@ extension Monitor {
 
         if tunnel {
             return DnsCheck(state: .ok, resolvers: resolvers, message: "DNS queries go through your VPN tunnel (\(list) via \(iface ?? "tunnel")).")
+        }
+        // The settings only hint; a lookup that reports where it left from settles it. Leaving through
+        // the VPN's own provider means DNS rides the tunnel, e.g. a VPN on the router that intercepts it.
+        if vpnLikely, let exitIsp = baseline?.isp,
+           let out = try? await run("/usr/bin/dig", ["+short", "+time=3", "+tries=1", "txt", "o-o.myaddr.l.google.com"], timeout: 8),
+           let egress = dnsEgress(out), let via = await geolocate(egress), ispMatches(via.isp, [exitIsp]) {
+            return DnsCheck(state: .ok, resolvers: resolvers,
+                            message: "DNS goes to \(list), and lookups leave from \(egress) (\(via.isp ?? exitIsp)), the same provider as your VPN exit, so they ride the tunnel.")
         }
         let primary = resolvers[0]
         // Where a local proxy sends queries (usually encrypted, often through the tunnel) isn't in scutil.

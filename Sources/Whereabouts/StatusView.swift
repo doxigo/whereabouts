@@ -114,8 +114,11 @@ struct StatusView: View {
             LabeledContent("Country", value: loc.map { "\(Countries.flag($0.countryCode)) \($0.country ?? "—")" } ?? "—")
             LabeledContent("City", value: loc?.city ?? "—")
             LabeledContent("ISP", value: loc?.isp ?? "—")
-            // The provider only says "looks like a proxy"; the name comes from the machine.
+            // The provider only says "looks like a proxy"; the name comes from the machine. IP databases
+            // know who registered the address, not the VPN brand, so a VPN on the router stays unnamed.
             LabeledContent("VPN / Proxy", value: m.geo.vpnName.map { "\(flag) · \($0)" } ?? flag)
+                .help(loc?.isVpn == true && m.geo.vpnName == nil
+                      ? "No VPN app or tunnel is running on this Mac, so it's likely on your router or network, where Whereabouts can't see its name." : "")
             // Live: Match time zone changes it, and NSSystemTimeZoneDidChange refreshes it.
             LabeledContent("Mac time zone", value: zoneName(m.systemTimeZone))
         }

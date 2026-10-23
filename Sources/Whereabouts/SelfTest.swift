@@ -78,12 +78,24 @@ func selfTest() {
     check(matchRule("notbank.example", [rule]) == nil, "suffix without dot doesn't match")
     check(locationSatisfies(Location(countryCode: "XA", city: "home city"), rule), "city match is case-insensitive")
     check(!locationSatisfies(Location(countryCode: "XA", city: "Other City"), rule), "wrong city")
+    // The tab is read in-process; a denied Automation grant must still read as "permission needed".
+    MainActor.assumeIsolated {
+        check((try? runAppleScript("return \"ok\"")) == "ok", "AppleScript runs in-process")
+        do {
+            _ = try runAppleScript("error \"Not authorized to send Apple events to Browser.\" number -1743")
+            check(false, "AppleScript error throws")
+        } catch {
+            check(isAutomationDenied(error), "Automation denial is recognized: \(error.localizedDescription)")
+        }
+    }
 
     // Leak helpers
     check(isPrivateAddress("100.64.0.53"), "CGNAT resolver is private")
     check(isPrivateAddress("192.168.1.1") && isPrivateAddress("fd00::1"), "LAN addresses are private")
     check(!isPrivateAddress("8.8.8.8") && !isPrivateAddress("2001:4860:4860::8888"), "public addresses")
     check(isLoopbackAddress("127.0.2.2") && isLoopbackAddress("::1") && !isLoopbackAddress("10.0.0.1"), "loopback resolvers are local proxies")
+    check(networkKey("198.51.100.7") == networkKey("198.51.100.240") && networkKey("198.51.100.7") != networkKey("198.51.101.7"), "IPv4 lookups share a /24")
+    check(networkKey("2001:db8:12:1::a") == networkKey("2001:db8:12:ff::b") && networkKey("2001:db8:12::1") != networkKey("2001:db8:13::1"), "IPv6 lookups share a /48")
     let scutil = """
     DNS configuration
 
@@ -106,6 +118,9 @@ func selfTest() {
     let blocks = parseResolvers(scutil)
     check(blocks == [ResolverBlock(nameservers: ["100.64.0.53"], iface: "utun4")], "scutil parse: \(blocks)")
     check(isTunnelInterface("utun4") && !isTunnelInterface("en0"), "tunnel interfaces")
+    check(dnsEgress("\"45.13.191.194\"\n") == "45.13.191.194", "DNS egress: resolver address")
+    check(dnsEgress("\"172.253.1.2\"\n\"edns0-client-subnet 45.13.191.0/24\"\n") == "45.13.191.0", "DNS egress: client subnet wins")
+    check(dnsEgress(";; connection timed out; no servers could be reached\n") == nil, "DNS egress: timeout")
 
     // Kill switch helper
     check(KillSwitch.setupScript(user: "alice").contains("alice ALL=(root) NOPASSWD: /Library/Application\\ Support/Whereabouts/killswitch-helper.sh engage"), "sudoers grant")

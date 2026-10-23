@@ -177,10 +177,26 @@ func fetchIpWho(_ ip: String? = nil) async throws -> Location {
                     lat: d["latitude"] as? Double, lon: d["longitude"] as? Double)
 }
 
+// ponytail: one entry per network ever looked up (a handful a day); prune if that ever matters.
+@MainActor private var geolocated: [String: (at: Date, location: Location)] = [:]
+
+/// The /24 (IPv4) or /48 (IPv6) an address sits in: one operator, one location. A public
+/// resolver's egress hops between addresses there on nearly every lookup.
+func networkKey(_ ip: String) -> String {
+    ip.contains(":") ? ip.split(separator: ":", omittingEmptySubsequences: false).prefix(3).joined(separator: ":")
+        : ip.split(separator: ".").prefix(3).joined(separator: ".")
+}
+
 /// Geolocate any address (leak checks). HTTPS first — a leak verdict shouldn't rest on plaintext.
-func geolocate(_ ip: String) async -> Location? {
-    if let l = try? await fetchIpWho(ip) { return l }
-    return try? await fetchIpApi(ip)
+/// Kept an hour per network: the leak checks ask about the same few every minute, and only
+/// read the place and provider, which the whole network shares.
+@MainActor func geolocate(_ ip: String) async -> Location? {
+    let key = networkKey(ip)
+    if let hit = geolocated[key], hit.at.timeIntervalSinceNow > -3600 { return hit.location }
+    var location = try? await fetchIpWho(ip)
+    if location == nil { location = try? await fetchIpApi(ip) }
+    if let location { geolocated[key] = (Date(), location) }
+    return location
 }
 
 /// Provider names drift ("Mullvad VPN AB" vs "Mullvad"), so match a fragment either way.

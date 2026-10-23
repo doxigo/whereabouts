@@ -32,9 +32,30 @@ func locationSatisfies(_ location: Location, _ rule: SiteRule) -> Bool {
     }
 }
 
-private func isAutomationDenied(_ error: Error) -> Bool {
+func isAutomationDenied(_ error: Error) -> Bool {
     let text = "\(error)"
     return ["-1743", "Not authorized", "not allowed", "assistive access"].contains { text.contains($0) }
+}
+
+private struct ScriptError: LocalizedError { let errorDescription: String? }
+
+/// Compiled once per source: launching osascript for each 5 s poll cost ~40 ms of CPU.
+@MainActor private var compiledScripts: [String: NSAppleScript] = [:]
+
+/// Runs AppleScript in-process. NSAppleScript is main-thread only, so the timeout
+/// caps how long a hung browser can hold up the app.
+@MainActor func runAppleScript(_ source: String, timeout: Int = 2) throws -> String {
+    let source = "with timeout of \(timeout) seconds\n\(source)\nend timeout"
+    guard let script = compiledScripts[source] ?? NSAppleScript(source: source) else {
+        throw ScriptError(errorDescription: "Couldn't load the script.")
+    }
+    compiledScripts[source] = script
+    var error: NSDictionary?
+    let result = script.executeAndReturnError(&error)
+    if let error {
+        throw ScriptError(errorDescription: "\(error[NSAppleScript.errorMessage] ?? "AppleScript error") (\(error[NSAppleScript.errorNumber] ?? "?"))")
+    }
+    return result.stringValue ?? ""
 }
 
 extension Monitor {
@@ -69,6 +90,13 @@ extension Monitor {
               let kind = browsers[name.lowercased()] else {
             return SiteWatchStatus(state: .idle, message: "No supported browser is active.")
         }
+        // A tab that can't be read stays that way until something changes: ask every 30 s, not every 5.
+        // Switching apps clears this, so coming back from System Settings asks at once.
+        if let last = unreadableTab, last.pid == app.processIdentifier, Date().timeIntervalSince(last.at) < 30 { return last.status }
+        func unreadable(_ status: SiteWatchStatus) -> SiteWatchStatus {
+            unreadableTab = (app.processIdentifier, Date(), status)
+            return status
+        }
 
         // Target by bundle id / pid so a renamed or localized app still resolves.
         let target = app.bundleIdentifier.map { "application id \"\($0)\"" } ?? "application \"\(name)\""
@@ -92,22 +120,22 @@ extension Monitor {
 
         let url: String
         do {
-            url = try await run("/usr/bin/osascript", ["-e", script]).trimmingCharacters(in: .whitespacesAndNewlines)
+            url = try runAppleScript(script).trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             if isAutomationDenied(error) {
-                return SiteWatchStatus(state: .blocked, browser: name,
-                                       message: "Allow Whereabouts to control \(name) (System Settings → Privacy & Security → Automation).")
+                return unreadable(SiteWatchStatus(state: .blocked, browser: name,
+                                                  message: "Allow Whereabouts to control \(name) (System Settings → Privacy & Security → Automation)."))
             }
             if kind == .firefox {
-                return SiteWatchStatus(state: .unsupported, browser: name, message: "\(name)'s active tab URL can't be read for location checks.")
+                return unreadable(SiteWatchStatus(state: .unsupported, browser: name, message: "\(name)'s active tab URL can't be read for location checks."))
             }
             log.error("Couldn't read the active tab in \(name): \(error.localizedDescription)")
-            return SiteWatchStatus(state: .idle, browser: name, message: "Couldn't read the active tab in \(name).")
+            return unreadable(SiteWatchStatus(state: .idle, browser: name, message: "Couldn't read the active tab in \(name)."))
         }
 
         guard url.contains("://"), let host = normalizeDomain(url) else {
             return kind == .firefox
-                ? SiteWatchStatus(state: .unsupported, browser: name, message: "\(name)'s active tab URL can't be read for location checks.")
+                ? unreadable(SiteWatchStatus(state: .unsupported, browser: name, message: "\(name)'s active tab URL can't be read for location checks."))
                 : SiteWatchStatus(state: .idle, browser: name, message: "No web page open in \(name).")
         }
         if host != lastSiteHost { lastSiteHost = host }

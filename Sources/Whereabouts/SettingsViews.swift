@@ -47,15 +47,6 @@ struct GeneralSettings: View {
                     Text("Launch at login")
                     Text("Start monitoring automatically when you log in.")
                 }
-                Toggle(isOn: m.binding(\.checkUpdates)) {
-                    Text("Check for updates")
-                    Text("Once a day, ask GitHub whether a newer release is out. A new version shows in the menu.")
-                }
-                Toggle(isOn: m.binding(\.installUpdates)) {
-                    Text("Install updates automatically")
-                    Text("Download the new version and restart with it, once you've switched to another app.")
-                }
-                .disabled(!m.settings.checkUpdates)
             }
 
             Section("Alerts") {
@@ -489,5 +480,92 @@ struct ProtectionSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - About
+
+struct AboutSettings: View {
+    @Environment(Monitor.self) private var m
+    @State private var checking = false
+    @State private var failedAt: Date?
+
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 64, height: 64)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Whereabouts").font(.title2.bold())
+                        Text("Version \(appVersion) (\(appBuild))").foregroundStyle(.secondary).textSelection(.enabled)
+                        Text("Keeps checking where the internet thinks your Mac is.").foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section("Updates") {
+                LabeledContent {
+                    updateActions
+                } label: {
+                    Text(updateStatus.title)
+                    Text(updateStatus.detail)
+                }
+                Toggle(isOn: m.binding(\.checkUpdates)) {
+                    Text("Check for updates automatically")
+                    Text("Once a day, ask GitHub whether a newer release is out. A new version shows in the menu.")
+                }
+                Toggle(isOn: m.binding(\.installUpdates)) {
+                    Text("Install updates automatically")
+                    Text("Download the new version and restart with it, once you've switched to another app.")
+                }
+                .disabled(!m.settings.checkUpdates)
+            }
+
+            Section {
+                Link("What's New in \(appVersion)", destination: repoURL.appending(path: "releases/tag/v\(appVersion)"))
+                Link("Source Code on GitHub", destination: repoURL)
+                Link("Report an Issue", destination: repoURL.appending(path: "issues/new"))
+                Link("Alibi, the Companion Browser Extension", destination: URL(string: "https://github.com/doxigo/alibi")!)
+            } header: {
+                Text("Links")
+            } footer: {
+                let copyright = Bundle.main.object(forInfoDictionaryKey: "NSHumanReadableCopyright") as? String ?? ""
+                Footer("\(copyright). Free software under the GNU General Public License v3.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    @ViewBuilder private var updateActions: some View {
+        if checking || m.installingUpdate {
+            ProgressView().controlSize(.small)
+        } else if let release = m.latestRelease {
+            HStack {
+                Button("Release Notes") { NSWorkspace.shared.open(release.page) }
+                // If it can't install in place, the release page has the disk image.
+                Button("Install and Restart") {
+                    Task { if !(await m.installUpdate()) { NSWorkspace.shared.open(release.page) } }
+                }
+            }
+        } else {
+            Button("Check Now") {
+                Task {
+                    checking = true
+                    failedAt = await m.fetchLatestRelease() ? nil : Date()
+                    checking = false
+                }
+            }
+        }
+    }
+
+    private var updateStatus: (title: String, detail: String) {
+        if m.installingUpdate { return ("Installing update…", "Whereabouts restarts with the new version when it's done.") }
+        if checking { return ("Checking for updates…", "Asking GitHub for the latest release.") }
+        if let release = m.latestRelease { return ("Version \(release.version) is available", "You have \(appVersion).") }
+        // A later automatic check that got through supersedes a failed manual one.
+        if let failedAt, failedAt > m.lastUpdateCheck ?? .distantPast { return ("Couldn't reach GitHub", "Check your connection and try again.") }
+        if let at = m.lastUpdateCheck { return ("Whereabouts is up to date", "Last checked \(at.formatted(date: .abbreviated, time: .shortened)).") }
+        return ("Not checked yet", m.settings.checkUpdates ? "Whereabouts checks once a day." : "Automatic checks are off.")
     }
 }
