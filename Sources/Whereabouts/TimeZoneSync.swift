@@ -103,6 +103,7 @@ extension Monitor {
         refreshSystemTimeZone()
         guard on else {
             update { $0.matchTimeZone = false }
+            AlibiHost.publishSystem(nil) // Alibi takes the zone back
             // Go home silently first, so canceling the removal prompt still leaves the right zone.
             if let home = settings.homeTimeZone, home != systemTimeZone { try? await TimeZoneHelper.set(home) }
             if let home = settings.homeRegion, home != RegionPref.current { _ = RegionPref.set(home) }
@@ -133,17 +134,21 @@ extension Monitor {
         update { $0.matchTimeZone = true; $0.homeTimeZone = home }
     }
 
-    /// Point the Mac at the zone and region the current connection calls for, if it isn't already.
+    /// Point the Mac at the zone and region the current connection, or Alibi's cover, calls for, if it isn't already.
     func syncTimeZone() async {
-        guard settings.matchTimeZone, geo.kind == .safe || geo.kind == .violation, let location = geo.location else { return }
+        guard settings.matchTimeZone else { AlibiHost.publishSystem(nil); return }
+        let location = geo.kind == .safe || geo.kind == .violation ? geo.location : nil
         // On a VPN, follow the exit. Off it, IP geolocation is only approximate,
         // so the real answer is home.
-        let onVpn = geo.vpnName != nil || location.isVpn == true
-        syncRegion(onVpn: onVpn, exit: location.countryCode)
-        guard let home = settings.homeTimeZone, !timeZoneInFlight, !TimeZoneHelper.automaticIsOn,
-              let target = onVpn ? location.timeZone : home, TimeZone(identifier: target) != nil else { return }
+        let onVpn = geo.vpnName != nil || location?.isVpn == true
+        let wish = alibiWish
+        syncRegion(wish: wish, location: location, onVpn: onVpn)
+        guard let home = settings.homeTimeZone, !TimeZoneHelper.automaticIsOn,
+              let target = timeZoneTarget(wish: wish, exitZone: location?.timeZone, onVpn: onVpn, connectionKnown: location != nil, home: home),
+              TimeZone(identifier: target) != nil else { AlibiHost.publishSystem(nil); return }
+        guard !timeZoneInFlight else { return }
         refreshSystemTimeZone()
-        guard target != systemTimeZone else { return }
+        guard target != systemTimeZone else { AlibiHost.publishSystem(target); return }
 
         timeZoneInFlight = true
         defer { timeZoneInFlight = false }
@@ -151,24 +156,51 @@ extension Monitor {
             try await TimeZoneHelper.set(target)
             refreshSystemTimeZone()
             timeZoneError = nil
+            AlibiHost.publishSystem(systemTimeZone == target ? target : nil)
             notify("Time zone changed", target == home
                 ? "Mac time zone set back to your home zone, \(target)."
+                : target == wish?.zone ? "Mac time zone set to \(target), Alibi's location."
                 : "Mac time zone set to \(target) to match your connection.")
         } catch {
+            AlibiHost.publishSystem(nil)
             timeZoneError = "Couldn't change the time zone — the helper may be missing. Turn the setting off and on again to reinstall it."
             log.error("Time zone change failed: \(error.localizedDescription)")
         }
+        // Alibi's place may have moved while the helper ran, when a sync returns early: catch up once
+        // this one is done (the task runs after `defer` clears the flag), rather than at the next check.
+        if alibiWish != wish { Task { await syncTimeZone() } }
     }
 
-    private func syncRegion(onVpn: Bool, exit: String?) {
+    private func syncRegion(wish: AlibiWish?, location: Location?, onVpn: Bool) {
         guard let current = RegionPref.current else { return }
         // The region in use the first time this runs is home, as with the zone.
         let home = settings.homeRegion ?? current
         if settings.homeRegion == nil { update { $0.homeRegion = home } }
-        guard let target = onVpn ? exit : home, target != current else { return }
+        guard let target = regionTarget(wish: wish, exitCountry: location?.countryCode, onVpn: onVpn,
+                                        connectionKnown: location != nil, home: home),
+              target != current else { return }
         let name = Countries.name(target) ?? target
         guard RegionPref.set(target) else { log.error("Region change failed"); return }
         notify("Region changed", target == home ? "Mac region set back to your home region, \(name)."
+            : target == wish?.country ? "Mac region set to \(name), Alibi's location."
             : "Mac region set to \(name) to match your connection.")
     }
+}
+
+/// Where the Mac's clock should be. A place Alibi has you in for all sites comes first; with Alibi
+/// off, home; otherwise the VPN's exit while one is up, and home without one. nil: no answer yet.
+func timeZoneTarget(wish: AlibiWish?, exitZone: String?, onVpn: Bool, connectionKnown: Bool, home: String) -> String? {
+    if let zone = wish?.zone { return zone }
+    if wish?.isOff == true { return home }
+    guard connectionKnown else { return nil }
+    return onVpn ? exitZone : home
+}
+
+/// The region to go with it: the country of Alibi's place (home if its locale names none), home with
+/// Alibi off, otherwise the exit's while a VPN is up, and home without one. nil: no answer yet.
+func regionTarget(wish: AlibiWish?, exitCountry: String?, onVpn: Bool, connectionKnown: Bool, home: String) -> String? {
+    if wish?.zone != nil { return wish?.country ?? home }
+    if wish?.isOff == true { return home }
+    guard connectionKnown else { return nil }
+    return onVpn ? exitCountry : home
 }

@@ -27,6 +27,8 @@ final class Monitor {
     private(set) var pausedUntil: Date?
     var systemTimeZone = TimeZone.current.identifier
     var timeZoneError: String?
+    /// Alibi's All sites cover, as its host last heard it: with Match time zone on, the Mac's clock follows it.
+    var alibiWish = AlibiHost.readWish()
 
     var leaking: Bool { leak.ipv6.state == .leak || leak.dns.state == .leak }
     var edgeLineVisible: Bool {
@@ -63,6 +65,7 @@ final class Monitor {
     @ObservationIgnored private var pauseTask: Task<Void, Never>?
     @ObservationIgnored var reblockTask: Task<Void, Never>?
     @ObservationIgnored private var netDebounce: Task<Void, Never>?
+    @ObservationIgnored private var wishWatch: DispatchSourceFileSystemObject?
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
     @ObservationIgnored private var pathSatisfied = true
     @ObservationIgnored private var pathSeen = false
@@ -83,6 +86,8 @@ final class Monitor {
     func start() {
         if Demo.enabled { Demo.apply(to: self); return }
         AlibiHost.install()
+        AlibiHost.announce()
+        watchAlibiWish()
         syncLoginItem()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         Task { await refreshKillSwitchState() }
@@ -149,6 +154,30 @@ final class Monitor {
         if old.shareStatus != next.shareStatus {
             if next.shareStatus { Task { await checkGeo() } } else { StatusFile.remove() }
         }
+    }
+
+    /// Alibi's host keeps the All sites cover in the app's folder. Atomic writes swap the file, so
+    /// watch the folder; other files there change too, and an unchanged cover is ignored.
+    private func watchAlibiWish() {
+        try? FileManager.default.createDirectory(at: Store.dir, withIntermediateDirectories: true)
+        let folder = open(Store.dir.path, O_EVTONLY)
+        guard folder >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: folder, eventMask: .write, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.alibiWishChanged() }
+        }
+        source.setCancelHandler { close(folder) }
+        source.resume()
+        wishWatch = source
+    }
+
+    private func alibiWishChanged() {
+        let wish = AlibiHost.readWish()
+        guard wish != alibiWish else { return }
+        alibiWish = wish
+        let place = wish?.zone ?? (wish?.isOff == true ? "off" : "the connection's")
+        log.info("Alibi's location for all sites: \(place)")
+        if settings.matchTimeZone { Task { await syncTimeZone() } }
     }
 
     private func syncLoginItem() {

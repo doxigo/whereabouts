@@ -174,7 +174,7 @@ struct LocationSettings: View {
         Section {
             Toggle(isOn: Binding(get: { m.settings.matchTimeZone }, set: { v in Task { await m.setMatchTimeZone(v) } })) {
                 Text("Match my Mac's time zone and region to my connection")
-                Text("While a VPN is up, the Mac uses the exit's time zone and region; otherwise your home ones. The menu bar clock keeps your home time.")
+                Text("While a VPN is up, the Mac uses the exit's time zone and region; otherwise your home ones. With Alibi on a place for all sites, the Mac uses that place's instead. The menu bar clock keeps your home time.")
             }
             // Fighting Location Services would flip the zone back and forth.
             .disabled(automaticZone && !m.settings.matchTimeZone)
@@ -201,6 +201,9 @@ struct LocationSettings: View {
                 }
             }
             LabeledContent("Mac is set to", value: zoneName(m.systemTimeZone))
+            if m.settings.matchTimeZone, let zone = m.alibiWish?.zone {
+                LabeledContent("Alibi's location", value: zoneName(zone))
+            }
             if let error = m.timeZoneError {
                 Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
             }

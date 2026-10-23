@@ -246,6 +246,46 @@ func selfTest() {
           == AlibiCover(timezone: "Etc/GMT-1", locale: "sv-SE", lat: 59.3, lon: 18.1), "Alibi cover takes the country's language")
     check(alibiCover(Location(countryCode: "SE", timeZone: "Nowhere/Else")) == nil, "no cover without a real zone")
     check(nativeMessage(Data("{}".utf8)) == Data([2, 0, 0, 0]) + Data("{}".utf8), "native message length prefix")
+    check(String(decoding: AlibiHost.helloMessage(), as: UTF8.self) == #"{"accepts":["cover"],"hello":"whereabouts"}"#, "hello says it takes Alibi's cover")
+    check(String(decoding: AlibiHost.systemMessage("Etc/GMT-1"), as: UTF8.self) == #"{"system":"Etc/GMT-1"}"#, "system zone")
+    check(String(decoding: AlibiHost.systemMessage(nil), as: UTF8.self) == #"{"system":null}"#, "no system zone is null, not left out")
+
+    // Alibi's All sites cover, for the Mac's clock. Its zone and locale: a fixed-offset zone, Sweden's language.
+    let place = alibiWish(fromMessage: Data(#"{"cover":{"configuration":"stockholm","timezone":"Etc/GMT-1","locale":"sv-SE"}}"#.utf8))
+    check(place == AlibiWish(configuration: "stockholm", timezone: "Etc/GMT-1", locale: "sv-SE"), "Alibi's cover read")
+    check(place?.zone == "Etc/GMT-1" && place?.country == "SE", "a place's zone and country")
+    let off = alibiWish(fromMessage: Data(#"{"cover":{"configuration":"browserDefault","timezone":null,"locale":null}}"#.utf8))
+    check(off?.isOff == true && off?.zone == nil && off?.country == nil, "Alibi off")
+    let byIp = alibiWish(fromMessage: Data(#"{"cover":{"configuration":"ipAddress","timezone":"Etc/GMT-1","locale":"sv-SE"}}"#.utf8))
+    check(byIp?.followsConnection == true && byIp?.zone == nil, "Match my IP address leaves the clock to the connection")
+    check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"x","timezone":"Nowhere/Else"}}"#.utf8)) == nil, "a cover with no real zone is refused")
+    check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"","timezone":"Etc/GMT-1"}}"#.utf8)) == nil, "a cover with no kind is refused")
+    check(alibiWish(fromMessage: Data(#"{"something":"else"}"#.utf8)) == nil && alibiWish(fromMessage: Data("[".utf8)) == nil, "other messages aren't covers")
+    check(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil).country == nil, "a place without a locale names no country")
+    // Where the clock goes: Alibi's place first, home with Alibi off, otherwise as before.
+    func zoneFor(_ wish: AlibiWish?, vpn: Bool = true, known: Bool = true) -> String? {
+        timeZoneTarget(wish: wish, exitZone: "Etc/GMT-2", onVpn: vpn, connectionKnown: known, home: "GMT+0330")
+    }
+    check(zoneFor(place) == "Etc/GMT-1", "Alibi's place wins over the exit")
+    check(zoneFor(place, vpn: false, known: false) == "Etc/GMT-1", "Alibi's place needs no connection")
+    check(zoneFor(off) == "GMT+0330", "Alibi off: home")
+    check(zoneFor(byIp) == "Etc/GMT-2" && zoneFor(nil) == "Etc/GMT-2", "Match my IP address, or no word from Alibi: the exit")
+    check(zoneFor(nil, vpn: false) == "GMT+0330", "no VPN: home")
+    check(zoneFor(nil, known: false) == nil, "no connection, no word from Alibi: no answer yet")
+    func regionFor(_ wish: AlibiWish?, vpn: Bool = true) -> String? {
+        regionTarget(wish: wish, exitCountry: "XB", onVpn: vpn, connectionKnown: true, home: "XA")
+    }
+    check(regionFor(place) == "SE", "the region follows Alibi's place")
+    check(regionFor(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil)) == "XA", "a place without a country keeps the home region")
+    check(regionFor(off) == "XA" && regionFor(byIp) == "XB" && regionFor(nil, vpn: false) == "XA", "region: home off, exit on a VPN")
+    // The Mac on Alibi's place, the connection somewhere else: a site can compare the two.
+    var following = AppSettings()
+    following.matchTimeZone = true
+    let onPlace = MacFacts(timeZone: "Etc/GMT-1", automaticZone: false, region: "SE")
+    check(consistencyWarnings(location: exitZoned, onVpn: true, mac: onPlace, settings: following, matchFailing: false, alibiCountry: "SE")
+        .map(\.kind) == [.timeZone], "Alibi's place in another country than the connection")
+    check(consistencyWarnings(location: exitZoned, onVpn: true, mac: onPlace, settings: following, matchFailing: false, alibiCountry: "XB")
+        .isEmpty, "Alibi's place in the connection's country")
 
     // status.json: git-ip-guard reads these exact names. Whole seconds; unknowns left out.
     let regional = Location(ip: "198.51.100.1", country: "Exit Country", countryCode: "XB", region: "Exit Region", isp: "Tunnel Provider AB", isVpn: true)
