@@ -154,14 +154,14 @@ private func string(_ d: [String: Any], _ key: String) -> String? { d[key] as? S
 /// address it geolocates that address instead of this machine's exit.
 func fetchIpApi(_ ip: String? = nil) async throws -> Location {
     let path = ip?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
-    let d = try await fetchJSON("http://ip-api.com/json/\(path)?fields=status,message,query,country,countryCode,city,isp,proxy,hosting,timezone")
+    let d = try await fetchJSON("http://ip-api.com/json/\(path)?fields=status,message,query,country,countryCode,city,isp,proxy,hosting,timezone,lat,lon")
     guard string(d, "status") == "success" else { throw HTTPError(status: -2) }
     let proxy = d["proxy"] as? Bool, hosting = d["hosting"] as? Bool
     return Location(ip: string(d, "query"), country: string(d, "country"),
                     countryCode: string(d, "countryCode")?.uppercased(), city: string(d, "city"),
                     isp: string(d, "isp"),
                     isVpn: proxy == nil && hosting == nil ? nil : (proxy ?? false) || (hosting ?? false),
-                    timeZone: string(d, "timezone"))
+                    timeZone: string(d, "timezone"), lat: d["lat"] as? Double, lon: d["lon"] as? Double)
 }
 
 /// ipwho.is over HTTPS — no VPN detection.
@@ -173,7 +173,8 @@ func fetchIpWho(_ ip: String? = nil) async throws -> Location {
     return Location(ip: string(d, "ip"), country: string(d, "country"),
                     countryCode: string(d, "country_code")?.uppercased(), city: string(d, "city"),
                     isp: string(connection, "isp") ?? string(connection, "org"), isVpn: nil,
-                    timeZone: (d["timezone"] as? [String: Any]).flatMap { string($0, "id") })
+                    timeZone: (d["timezone"] as? [String: Any]).flatMap { string($0, "id") },
+                    lat: d["latitude"] as? Double, lon: d["longitude"] as? Double)
 }
 
 /// Geolocate any address (leak checks). HTTPS first — a leak verdict shouldn't rest on plaintext.

@@ -222,6 +222,12 @@ func selfTest() {
 
     check(Countries.flag("XA") == "\u{1F1FD}\u{1F1E6}" && Countries.flag(nil) == "🏳️" && Countries.flag("1A") == "🏳️", "flags")
 
+    // Alibi host
+    check(alibiCover(Location(countryCode: "SE", timeZone: "Etc/GMT-1", lat: 59.3, lon: 18.1))
+          == AlibiCover(timezone: "Etc/GMT-1", locale: "sv-SE", lat: 59.3, lon: 18.1), "Alibi cover takes the country's language")
+    check(alibiCover(Location(countryCode: "SE", timeZone: "Nowhere/Else")) == nil, "no cover without a real zone")
+    check(nativeMessage(Data("{}".utf8)) == Data([2, 0, 0, 0]) + Data("{}".utf8), "native message length prefix")
+
     // Updates
     let release: [String: Any] = ["tag_name": "v1.10.0", "html_url": "https://example.com/release", "assets": [
         ["name": "notes.txt", "browser_download_url": "https://example.com/notes.txt"],

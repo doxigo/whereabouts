@@ -206,6 +206,8 @@ struct Location: Equatable {
     var isVpn: Bool?
     /// IANA zone identifier of the exit.
     var timeZone: String?
+    var lat: Double?
+    var lon: Double?
 
     var place: String { country ?? countryCode ?? "unknown" }
     var cityPlace: String { city.map { "\($0), \(place)" } ?? place }

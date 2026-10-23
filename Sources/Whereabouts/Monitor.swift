@@ -76,6 +76,7 @@ final class Monitor {
 
     func start() {
         if Demo.enabled { Demo.apply(to: self); return }
+        AlibiHost.install()
         syncLoginItem()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         Task { await refreshKillSwitchState() }
@@ -334,6 +335,7 @@ final class Monitor {
                                message: offline ? "No internet connection." : "Unable to check your location (provider unavailable).")
         }
         geo = status
+        if let location = status.location { AlibiHost.publish(location) }
 
         let code = status.location?.countryCode
         let isp = status.location?.isp
