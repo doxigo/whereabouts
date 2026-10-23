@@ -1,0 +1,22 @@
+name: Build
+
+# Builds the app and runs its self-test for every push to main and every pull request,
+# so a change is known to compile and pass before it's tagged for release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      # No signing identity on the runner, so build.sh signs ad hoc.
+      - run: ./build.sh
+      - name: Self-test
+        run: build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
