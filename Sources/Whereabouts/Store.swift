@@ -61,6 +61,11 @@ enum Store {
 /// themselves. A stable interface: fields are only ever added. Unknown fields are left out.
 enum StatusFile {
     static let url = Store.dir.appendingPathComponent("status.json")
+    static let gitIpGuardURL = URL(string: "https://github.com/doxigo/git-ip-guard")!
+    /// Where Git IP Guard's installer puts its scripts.
+    static var gitIpGuardInstalled: Bool {
+        FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.local/share/git-ip-guard/git-ip-check")
+    }
 
     private struct Record: Encodable {
         var version = 1

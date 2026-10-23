@@ -209,7 +209,11 @@ func selfTest() {
     check(announced.isEmpty && newWarnings(both, announced: &announced, connectionKnown: true).count == 2, "cleared then back notifies again")
     if let legacy = try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8)) {
         check(legacy.warnTimeZone && legacy.warnAutomaticZone && legacy.warnRegion, "warnings default on")
+        check(legacy.shareStatus, "status file defaults on")
     }
+    var unshared = AppSettings()
+    unshared.shareStatus = false
+    check((try? JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(unshared)))?.shareStatus == false, "status file off survives a save")
 
     // Menu-bar clock: home time in every mode, whatever zone the Mac is on.
     let homeTZ = TimeZone(identifier: "GMT+0330")!, macTZ = TimeZone(identifier: "GMT+0200")!

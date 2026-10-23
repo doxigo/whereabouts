@@ -145,6 +145,10 @@ final class Monitor {
             Task { await syncTimeZone() }
         }
         if old.checkUpdates != next.checkUpdates || old.installUpdates != next.installUpdates { Task { await checkForUpdate() } }
+        // Turned on: a fresh check writes the file, rather than an answer that may predate a network change.
+        if old.shareStatus != next.shareStatus {
+            if next.shareStatus { Task { await checkGeo() } } else { StatusFile.remove() }
+        }
     }
 
     private func syncLoginItem() {
@@ -294,7 +298,11 @@ final class Monitor {
     /// re-check lands, so no reader acts on a stale "safe" after the VPN drops.
     private func markChecking() {
         pathChanges += 1
-        StatusFile.publish(GeoStatus(checkedAt: Date()))
+        publishStatus(GeoStatus(checkedAt: Date()))
+    }
+
+    private func publishStatus(_ status: GeoStatus) {
+        if settings.shareStatus { StatusFile.publish(status) }
     }
 
     /// After wake or a network change the link takes a moment, so retry with backoff
@@ -377,7 +385,7 @@ final class Monitor {
         if let location = status.location { AlibiHost.publish(location) }
         // Every outcome, so readers can judge freshness. If the network changed mid-check this answer
         // may be the old route's, and a re-check is already on its way: keep saying "checking".
-        StatusFile.publish(pathChanges == pathAtStart ? status : GeoStatus(checkedAt: Date()))
+        publishStatus(pathChanges == pathAtStart ? status : GeoStatus(checkedAt: Date()))
 
         let code = status.location?.countryCode
         let isp = status.location?.isp

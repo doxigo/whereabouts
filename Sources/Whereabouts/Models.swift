@@ -107,6 +107,8 @@ struct AppSettings: Codable, Equatable {
     var checkUpdates = true
     /// Install a newer release found by that check, then relaunch.
     var installUpdates = true
+    /// Write each check to status.json, for Git IP Guard and other local tools.
+    var shareStatus = true
 
     /// A country or provider rule. Without one, every location passes.
     var hasLocationRules: Bool { !countries.isEmpty || (ispMode == .allowlist && !expectedIsps.isEmpty) }
@@ -172,6 +174,7 @@ extension AppSettings {
         warnRegion = c.get(.warnRegion, warnRegion)
         checkUpdates = c.get(.checkUpdates, checkUpdates)
         installUpdates = c.get(.installUpdates, installUpdates)
+        shareStatus = c.get(.shareStatus, shareStatus)
     }
 }
 

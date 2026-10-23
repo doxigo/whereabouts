@@ -413,6 +413,22 @@ struct ProtectionSettings: View {
             }
 
             Section {
+                Toggle(isOn: m.binding(\.shareStatus)) {
+                    Text("Share location with Git IP Guard")
+                    Text(!StatusFile.gitIpGuardInstalled ? "Git IP Guard isn't installed. It's a free command-line tool that stops git from reaching your remotes while your IP is in a sanctioned country."
+                         : m.settings.shareStatus ? "Git IP Guard is installed and checks git against this location, with no IP lookup of its own."
+                         : "Git IP Guard is installed and looks up your IP itself before git connects.")
+                }
+                if !StatusFile.gitIpGuardInstalled {
+                    Link("Get Git IP Guard", destination: StatusFile.gitIpGuardURL)
+                }
+            } header: {
+                Text("Git IP Guard")
+            } footer: {
+                Footer("Each check is saved to status.json in Whereabouts' folder, where other tools on this Mac can read it. Nothing leaves your Mac.")
+            }
+
+            Section {
                 Toggle(isOn: Binding(get: { m.settings.killSwitch }, set: { v in Task { await m.setKillSwitch(v) } })) {
                     Text("Enable kill switch")
                     Text("Asks for your admin password once to set up, then triggers automatically with no prompts.")
@@ -527,6 +543,7 @@ struct AboutSettings: View {
                 Link("Source Code on GitHub", destination: repoURL)
                 Link("Report an Issue", destination: repoURL.appending(path: "issues/new"))
                 Link("Alibi, the Companion Browser Extension", destination: URL(string: "https://github.com/doxigo/alibi")!)
+                Link("Git IP Guard, Location Checks for Git", destination: StatusFile.gitIpGuardURL)
             } header: {
                 Text("Links")
             } footer: {
