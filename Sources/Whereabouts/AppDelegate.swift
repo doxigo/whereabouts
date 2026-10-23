@@ -49,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     func applicationWillTerminate(_ notification: Notification) {
         // Quitting must never strand the user with their internet blocked.
         monitor.releaseKillSwitchOnQuit()
+        // Readers also check the pid, which covers a crash.
+        StatusFile.remove()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {

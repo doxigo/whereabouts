@@ -200,6 +200,8 @@ struct Location: Equatable {
     var ip: String?
     var country: String?
     var countryCode: String?
+    /// State or province. Only status.json carries it, not history.
+    var region: String?
     var city: String?
     var isp: String?
     /// nil = the provider can't tell.

@@ -62,6 +62,8 @@ final class Monitor {
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
     @ObservationIgnored private var pathSatisfied = true
     @ObservationIgnored private var pathSeen = false
+    /// Bumped on each network change or wake, so a check that straddles one isn't published as current.
+    @ObservationIgnored private var pathChanges = 0
 
     init() {
         settings = Demo.enabled ? Demo.settings : Store.loadSettings()
@@ -87,7 +89,7 @@ final class Monitor {
         startNetworkWatch()
         _ = loop(every: 86_400, delay: 30) { await $0.checkForUpdate() }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.recheckConnectivity() }
+            MainActor.assumeIsolated { self?.markChecking(); self?.recheckConnectivity() }
         }
         NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshSystemTimeZone() }
@@ -249,6 +251,7 @@ final class Monitor {
                 guard let self else { return }
                 self.pathSatisfied = satisfied
                 guard self.pathSeen else { self.pathSeen = true; return }
+                self.markChecking()
                 self.netDebounce?.cancel()
                 self.netDebounce = Task {
                     try? await Task.sleep(for: .seconds(1))
@@ -260,6 +263,13 @@ final class Monitor {
         }
         monitor.start(queue: DispatchQueue(label: "path-monitor"))
         pathMonitor = monitor
+    }
+
+    /// The last answer may belong to the old route: status.json says "checking" until the
+    /// re-check lands, so no reader acts on a stale "safe" after the VPN drops.
+    private func markChecking() {
+        pathChanges += 1
+        StatusFile.publish(GeoStatus(checkedAt: Date()))
     }
 
     /// After wake or a network change the link takes a moment, so retry with backoff
@@ -302,6 +312,7 @@ final class Monitor {
     func checkGeo() async -> GeoStatus {
         if geoInFlight { geoRecheckQueued = true; return geo }
         geoInFlight = true
+        let pathAtStart = pathChanges
         defer {
             geoInFlight = false
             if geoRecheckQueued { geoRecheckQueued = false; Task { await checkGeo() } }
@@ -336,6 +347,9 @@ final class Monitor {
         }
         geo = status
         if let location = status.location { AlibiHost.publish(location) }
+        // Every outcome, so readers can judge freshness. If the network changed mid-check this answer
+        // may be the old route's, and a re-check is already on its way: keep saying "checking".
+        StatusFile.publish(pathChanges == pathAtStart ? status : GeoStatus(checkedAt: Date()))
 
         let code = status.location?.countryCode
         let isp = status.location?.isp

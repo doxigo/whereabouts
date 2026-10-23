@@ -33,6 +33,7 @@ The screenshots use made-up data from the app's demo mode (`--demo`). `Branding/
 - **Time zone, region and home clock.** Optionally moves the Mac to the VPN exit's time zone and region, so nothing on the Mac contradicts the IP, and back home when the VPN drops. The menu-bar clock keeps showing your home time either way. No app can remove the macOS clock, so a setting shrinks it to its small analog face instead.
 - **History.** Past lookups are kept, so you can see where this Mac has been seen.
 - **Alibi follows along.** With [Alibi](https://github.com/doxigo/alibi) on **Match my IP address**, Whereabouts tells it the moment the exit changes, so the browser's time zone, language and location move with your VPN without waiting for Alibi's own once-a-minute check.
+- **git-ip-guard follows along.** [git-ip-guard](https://github.com/doxigo/git-ip-guard) stops git from reaching your remotes while your IP is in a sanctioned country. While Whereabouts runs, git-ip-guard reads the location from Whereabouts' status file instead of looking it up again, so git and the menu bar agree on where you are.
 
 ### How Alibi hears about a new exit
 
@@ -41,6 +42,20 @@ Each time Whereabouts starts, it registers itself with Chrome and Brave as a nat
 When a check finds a new exit, the app writes its time zone, the country's most likely locale and its coordinates to `alibi.json` in `~/Library/Application Support/Whereabouts`. While Alibi has a cover on Match my IP address, Chrome keeps a copy of Whereabouts running in host mode (`Whereabouts chrome-extension://<id>/`). That copy sends Alibi the current exit, then each new one as soon as the file changes. It exits when Chrome hangs up or the app quits, and Alibi goes back to its own lookup.
 
 To set it up, open Whereabouts once, then load an Alibi version with the pinned ID (see Alibi's README) and choose **Match my IP address**. A Chrome Web Store copy of Alibi has a different ID, so it isn't admitted.
+
+### Reading the current location from other tools
+
+After every location check, Whereabouts writes the result to `status.json` in `~/Library/Application Support/Whereabouts`, so local tools such as [git-ip-guard](https://github.com/doxigo/git-ip-guard) can use it instead of looking up the IP themselves. This is a stable interface: fields are only added, never renamed or removed.
+
+```json
+{"checkedAt":1761217200,"city":"Kista","country":"Sweden","countryCode":"SE","ip":"203.0.113.7","isVpn":true,"isp":"Example ISP","kind":"safe","pid":12345,"region":"Stockholm","version":1}
+```
+
+- `version` is `1`. `pid` is the running app's process ID. `checkedAt` is the time of the check, in whole Unix seconds.
+- `kind` is Whereabouts' own verdict: `safe`, `violation`, `unknown`, `offline` or `checking`. Tools can apply their own rules to the location instead.
+- `ip`, `countryCode`, `country`, `region`, `city`, `isp` and `isVpn` are left out when unknown, and always on `unknown`, `offline` and `checking`.
+
+The file is replaced atomically. When the network changes or the Mac wakes, it says `checking` right away, so it never reports an old route's location while a new check is under way. It's deleted when the app quits. After a crash it stays, so treat it as current only if `pid` is still running and `checkedAt` is recent.
 
 ### How the kill switch works
 

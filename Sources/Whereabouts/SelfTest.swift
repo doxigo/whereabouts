@@ -228,6 +228,14 @@ func selfTest() {
     check(alibiCover(Location(countryCode: "SE", timeZone: "Nowhere/Else")) == nil, "no cover without a real zone")
     check(nativeMessage(Data("{}".utf8)) == Data([2, 0, 0, 0]) + Data("{}".utf8), "native message length prefix")
 
+    // status.json: git-ip-guard reads these exact names. Whole seconds; unknowns left out.
+    let regional = Location(ip: "198.51.100.1", country: "Exit Country", countryCode: "XB", region: "Exit Region", isp: "Tunnel Provider AB", isVpn: true)
+    let at1 = Date(timeIntervalSince1970: 1_761_217_200.7)
+    let full = String(decoding: StatusFile.encode(GeoStatus(kind: .safe, location: regional, checkedAt: at1), pid: 42) ?? Data(), as: UTF8.self)
+    check(full == #"{"checkedAt":1761217200,"country":"Exit Country","countryCode":"XB","ip":"198.51.100.1","isVpn":true,"isp":"Tunnel Provider AB","kind":"safe","pid":42,"region":"Exit Region","version":1}"#, "status file shape: \(full)")
+    let bare = String(decoding: StatusFile.encode(GeoStatus(kind: .offline, checkedAt: at1), pid: 42) ?? Data(), as: UTF8.self)
+    check(bare == #"{"checkedAt":1761217200,"kind":"offline","pid":42,"version":1}"#, "status file without a location: \(bare)")
+
     // Updates
     let release: [String: Any] = ["tag_name": "v1.10.0", "html_url": "https://example.com/release", "assets": [
         ["name": "notes.txt", "browser_download_url": "https://example.com/notes.txt"],

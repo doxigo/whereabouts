@@ -56,3 +56,40 @@ enum Store {
         }
     }
 }
+
+/// status.json: the latest check, for other local tools (git-ip-guard) to read instead of looking up the IP
+/// themselves. A stable interface: fields are only ever added. Unknown fields are left out.
+enum StatusFile {
+    static let url = Store.dir.appendingPathComponent("status.json")
+
+    private struct Record: Encodable {
+        var version = 1
+        /// Lets readers tell a running app's file from one left by a crash.
+        var pid: Int32
+        /// Unix seconds.
+        var checkedAt: Int
+        var kind: String
+        var ip, countryCode, country, region, city, isp: String?
+        var isVpn: Bool?
+    }
+
+    static func encode(_ status: GeoStatus, pid: Int32 = getpid()) -> Data? {
+        let l = status.location
+        let record = Record(pid: pid, checkedAt: Int((status.checkedAt ?? Date()).timeIntervalSince1970), kind: status.kind.rawValue,
+                            ip: l?.ip, countryCode: l?.countryCode, country: l?.country, region: l?.region,
+                            city: l?.city, isp: l?.isp, isVpn: l?.isVpn)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try? encoder.encode(record)
+    }
+
+    static func publish(_ status: GeoStatus) {
+        guard !Demo.enabled, let data = encode(status) else { return }
+        try? FileManager.default.createDirectory(at: Store.dir, withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static func remove() {
+        if !Demo.enabled { try? FileManager.default.removeItem(at: url) }
+    }
+}
