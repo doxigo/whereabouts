@@ -143,9 +143,12 @@ extension Monitor {
         let onVpn = geo.vpnName != nil || location?.isVpn == true
         let wish = alibiPlace
         syncRegion(wish: wish, location: location, onVpn: onVpn)
-        guard let home = settings.homeTimeZone, !TimeZoneHelper.automaticIsOn,
-              let target = timeZoneTarget(wish: wish, exitZone: location?.timeZone, onVpn: onVpn, connectionKnown: location != nil, home: home),
-              TimeZone(identifier: target) != nil else { AlibiHost.publishSystem(nil); return }
+        guard let home = settings.homeTimeZone, !TimeZoneHelper.automaticIsOn else { AlibiHost.publishSystem(nil); return }
+        // No answer yet (offline, or between checks) and no place from Alibi: the Mac stays where it is,
+        // and Alibi keeps what it was told, rather than hearing "none" now and the zone again in a minute.
+        guard let target = timeZoneTarget(wish: wish, exitZone: location?.timeZone, onVpn: onVpn, connectionKnown: location != nil, home: home)
+        else { return }
+        guard TimeZone(identifier: target) != nil else { AlibiHost.publishSystem(nil); return }
         guard !timeZoneInFlight else { return }
         refreshSystemTimeZone()
         guard target != systemTimeZone else { AlibiHost.publishSystem(target); return }
