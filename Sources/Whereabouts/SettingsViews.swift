@@ -174,10 +174,15 @@ struct LocationSettings: View {
         Section {
             Toggle(isOn: Binding(get: { m.settings.matchTimeZone }, set: { v in Task { await m.setMatchTimeZone(v) } })) {
                 Text("Match my Mac's time zone and region to my connection")
-                Text("While a VPN is up, the Mac uses the exit's time zone and region; otherwise your home ones. With Alibi on a place for all sites, the Mac uses that place's instead. The menu bar clock keeps your home time.")
+                Text("While a VPN is up, the Mac uses the exit's time zone and region; otherwise your home ones. The menu bar clock keeps your home time.")
             }
             // Fighting Location Services would flip the zone back and forth.
             .disabled(automaticZone && !m.settings.matchTimeZone)
+            Toggle(isOn: m.binding(\.followAlibi)) {
+                Text("Follow Alibi's location")
+                Text("With Alibi on a place for all sites (Tokyo, say), the Mac uses that place's time zone and region instead, so calendar, logs and scheduled jobs move there too. Off and Match my IP address in Alibi leave it to the connection.")
+            }
+            .disabled(!m.settings.matchTimeZone)
             if automaticZone {
                 LabeledContent {
                     Button("Open Date & Time") {
@@ -201,7 +206,7 @@ struct LocationSettings: View {
                 }
             }
             LabeledContent("Mac is set to", value: zoneName(m.systemTimeZone))
-            if m.settings.matchTimeZone, let zone = m.alibiWish?.zone {
+            if let zone = m.alibiPlace?.zone {
                 LabeledContent("Alibi's location", value: zoneName(zone))
             }
             if let error = m.timeZoneError {

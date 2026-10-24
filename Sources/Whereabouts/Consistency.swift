@@ -79,7 +79,7 @@ extension Monitor {
         let mac = MacFacts(timeZone: systemTimeZone, automaticZone: TimeZoneHelper.automaticIsOn,
                            region: Locale.autoupdatingCurrent.region?.identifier)
         return consistencyWarnings(location: loc, onVpn: geo.vpnName != nil || loc?.isVpn == true, mac: mac,
-                                   settings: settings, matchFailing: timeZoneError != nil, alibiCountry: alibiWish?.country)
+                                   settings: settings, matchFailing: timeZoneError != nil, alibiCountry: alibiPlace?.country)
     }
 
     /// Notifies once when a warning appears; the menu lists it for as long as it lasts.

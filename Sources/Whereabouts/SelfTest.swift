@@ -262,6 +262,18 @@ func selfTest() {
     check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"","timezone":"Etc/GMT-1"}}"#.utf8)) == nil, "a cover with no kind is refused")
     check(alibiWish(fromMessage: Data(#"{"something":"else"}"#.utf8)) == nil && alibiWish(fromMessage: Data("[".utf8)) == nil, "other messages aren't covers")
     check(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil).country == nil, "a place without a locale names no country")
+    // Alibi's place counts only with Match time zone and Follow Alibi's location both on; the second is off by default.
+    var matching = AppSettings()
+    matching.matchTimeZone = true
+    check(followedPlace(place, matching) == nil, "Follow Alibi's location starts off")
+    var alibiOnly = AppSettings()
+    alibiOnly.followAlibi = true
+    check(followedPlace(place, alibiOnly) == nil, "following Alibi needs Match time zone")
+    matching.followAlibi = true
+    check(followedPlace(place, matching) == place, "both on: the Mac follows Alibi's place")
+    let saved = try? JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(matching))
+    check(saved?.followAlibi == true && (try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8)))?.followAlibi == false,
+          "Follow Alibi's location is saved, and off when settings.json doesn't say")
     // Where the clock goes: Alibi's place first, otherwise as before. Off asks nothing of the Mac.
     func zoneFor(_ wish: AlibiWish?, vpn: Bool = true, known: Bool = true) -> String? {
         timeZoneTarget(wish: wish, exitZone: "Etc/GMT-2", onVpn: vpn, connectionKnown: known, home: "GMT+0330")
