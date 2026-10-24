@@ -187,20 +187,18 @@ extension Monitor {
     }
 }
 
-/// Where the Mac's clock should be. A place Alibi has you in for all sites comes first; with Alibi
-/// off, home; otherwise the VPN's exit while one is up, and home without one. nil: no answer yet.
+/// Where the Mac's clock should be. A place Alibi has you in for all sites comes first; otherwise,
+/// Alibi off or not, the VPN's exit while one is up, and home without one. nil: no answer yet.
 func timeZoneTarget(wish: AlibiWish?, exitZone: String?, onVpn: Bool, connectionKnown: Bool, home: String) -> String? {
     if let zone = wish?.zone { return zone }
-    if wish?.isOff == true { return home }
     guard connectionKnown else { return nil }
     return onVpn ? exitZone : home
 }
 
-/// The region to go with it: the country of Alibi's place (home if its locale names none), home with
-/// Alibi off, otherwise the exit's while a VPN is up, and home without one. nil: no answer yet.
+/// The region to go with it: the country of Alibi's place (home if its locale names none), otherwise
+/// the exit's while a VPN is up, and home without one. nil: no answer yet.
 func regionTarget(wish: AlibiWish?, exitCountry: String?, onVpn: Bool, connectionKnown: Bool, home: String) -> String? {
     if wish?.zone != nil { return wish?.country ?? home }
-    if wish?.isOff == true { return home }
     guard connectionKnown else { return nil }
     return onVpn ? exitCountry : home
 }

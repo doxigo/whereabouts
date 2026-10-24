@@ -31,13 +31,11 @@ struct AlibiWish: Codable, Equatable {
     var timezone: String?
     var locale: String?
 
-    /// Off: Alibi shows sites the real location, so the Mac goes home.
-    var isOff: Bool { configuration == "browserDefault" }
-    /// "Match my IP address": the Mac follows the connection, as it does without Alibi.
-    var followsConnection: Bool { configuration == "ipAddress" }
-    /// The zone of the place Alibi has you in, for the Mac to be held on.
+    /// The zone of the place Alibi has you in, for the Mac to be held on. Off and "Match my IP address"
+    /// name none: Alibi doesn't mind where the Mac is, so it follows the connection, as it does without Alibi.
     var zone: String? {
-        guard !isOff, !followsConnection, let timezone, TimeZone(identifier: timezone) != nil else { return nil }
+        guard configuration != "browserDefault", configuration != "ipAddress", let timezone,
+              TimeZone(identifier: timezone) != nil else { return nil }
         return timezone
     }
     /// That place's country, from its locale (sv-SE -> SE), for the Mac's region.

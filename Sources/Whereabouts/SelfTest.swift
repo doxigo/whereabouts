@@ -255,29 +255,30 @@ func selfTest() {
     check(place == AlibiWish(configuration: "stockholm", timezone: "Etc/GMT-1", locale: "sv-SE"), "Alibi's cover read")
     check(place?.zone == "Etc/GMT-1" && place?.country == "SE", "a place's zone and country")
     let off = alibiWish(fromMessage: Data(#"{"cover":{"configuration":"browserDefault","timezone":null,"locale":null}}"#.utf8))
-    check(off?.isOff == true && off?.zone == nil && off?.country == nil, "Alibi off")
+    check(off != nil && off?.zone == nil && off?.country == nil, "Alibi off names no place")
     let byIp = alibiWish(fromMessage: Data(#"{"cover":{"configuration":"ipAddress","timezone":"Etc/GMT-1","locale":"sv-SE"}}"#.utf8))
-    check(byIp?.followsConnection == true && byIp?.zone == nil, "Match my IP address leaves the clock to the connection")
+    check(byIp != nil && byIp?.zone == nil, "Match my IP address leaves the clock to the connection")
     check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"x","timezone":"Nowhere/Else"}}"#.utf8)) == nil, "a cover with no real zone is refused")
     check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"","timezone":"Etc/GMT-1"}}"#.utf8)) == nil, "a cover with no kind is refused")
     check(alibiWish(fromMessage: Data(#"{"something":"else"}"#.utf8)) == nil && alibiWish(fromMessage: Data("[".utf8)) == nil, "other messages aren't covers")
     check(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil).country == nil, "a place without a locale names no country")
-    // Where the clock goes: Alibi's place first, home with Alibi off, otherwise as before.
+    // Where the clock goes: Alibi's place first, otherwise as before. Off asks nothing of the Mac.
     func zoneFor(_ wish: AlibiWish?, vpn: Bool = true, known: Bool = true) -> String? {
         timeZoneTarget(wish: wish, exitZone: "Etc/GMT-2", onVpn: vpn, connectionKnown: known, home: "GMT+0330")
     }
     check(zoneFor(place) == "Etc/GMT-1", "Alibi's place wins over the exit")
     check(zoneFor(place, vpn: false, known: false) == "Etc/GMT-1", "Alibi's place needs no connection")
-    check(zoneFor(off) == "GMT+0330", "Alibi off: home")
-    check(zoneFor(byIp) == "Etc/GMT-2" && zoneFor(nil) == "Etc/GMT-2", "Match my IP address, or no word from Alibi: the exit")
-    check(zoneFor(nil, vpn: false) == "GMT+0330", "no VPN: home")
-    check(zoneFor(nil, known: false) == nil, "no connection, no word from Alibi: no answer yet")
+    check(zoneFor(off) == "Etc/GMT-2" && zoneFor(byIp) == "Etc/GMT-2" && zoneFor(nil) == "Etc/GMT-2",
+          "Alibi off, Match my IP address, or no word from Alibi: the exit")
+    check(zoneFor(off, vpn: false) == "GMT+0330" && zoneFor(nil, vpn: false) == "GMT+0330", "no VPN: home, Alibi off or not")
+    check(zoneFor(nil, known: false) == nil && zoneFor(off, known: false) == nil, "no connection and no place: no answer yet")
     func regionFor(_ wish: AlibiWish?, vpn: Bool = true) -> String? {
         regionTarget(wish: wish, exitCountry: "XB", onVpn: vpn, connectionKnown: true, home: "XA")
     }
     check(regionFor(place) == "SE", "the region follows Alibi's place")
     check(regionFor(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil)) == "XA", "a place without a country keeps the home region")
-    check(regionFor(off) == "XA" && regionFor(byIp) == "XB" && regionFor(nil, vpn: false) == "XA", "region: home off, exit on a VPN")
+    check(regionFor(off) == "XB" && regionFor(byIp) == "XB" && regionFor(off, vpn: false) == "XA" && regionFor(nil, vpn: false) == "XA",
+          "region: the exit on a VPN, home without one, Alibi off or not")
     // The Mac on Alibi's place, the connection somewhere else: a site can compare the two.
     var following = AppSettings()
     following.matchTimeZone = true

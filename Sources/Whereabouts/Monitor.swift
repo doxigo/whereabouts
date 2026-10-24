@@ -175,8 +175,7 @@ final class Monitor {
         let wish = AlibiHost.readWish()
         guard wish != alibiWish else { return }
         alibiWish = wish
-        let place = wish?.zone ?? (wish?.isOff == true ? "off" : "the connection's")
-        log.info("Alibi's location for all sites: \(place)")
+        log.info("Alibi's location for all sites: \(wish?.zone ?? "none, so the connection's")")
         if settings.matchTimeZone { Task { await syncTimeZone() } }
     }
 
