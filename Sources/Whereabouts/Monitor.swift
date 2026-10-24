@@ -27,8 +27,10 @@ final class Monitor {
     private(set) var pausedUntil: Date?
     var systemTimeZone = TimeZone.current.identifier
     var timeZoneError: String?
-    /// Alibi's All sites cover, as its host last heard it: with Match time zone on, the Mac's clock follows it.
+    /// Alibi's All sites cover, as its host last heard it.
     var alibiWish = AlibiHost.readWish()
+    /// The place the Mac's clock follows: Alibi's, with Match time zone and Follow Alibi's location on.
+    var alibiPlace: AlibiWish? { followedPlace(alibiWish, settings) }
 
     var leaking: Bool { leak.ipv6.state == .leak || leak.dns.state == .leak }
     var edgeLineVisible: Bool {
@@ -146,7 +148,8 @@ final class Monitor {
             Task { await checkSite() }
         }
         if !interval && (old.ipv6Check != next.ipv6Check || old.dnsCheck != next.dnsCheck) { Task { await checkLeaks() } }
-        if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion) {
+        if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion
+            || old.followAlibi != next.followAlibi) {
             Task { await syncTimeZone() }
         }
         if old.checkUpdates != next.checkUpdates || old.installUpdates != next.installUpdates { Task { await checkForUpdate() } }
@@ -176,7 +179,7 @@ final class Monitor {
         guard wish != alibiWish else { return }
         alibiWish = wish
         log.info("Alibi's location for all sites: \(wish?.zone ?? "none, so the connection's")")
-        if settings.matchTimeZone { Task { await syncTimeZone() } }
+        if settings.matchTimeZone && settings.followAlibi { Task { await syncTimeZone() } }
     }
 
     private func syncLoginItem() {

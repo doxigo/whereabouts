@@ -141,7 +141,7 @@ extension Monitor {
         // On a VPN, follow the exit. Off it, IP geolocation is only approximate,
         // so the real answer is home.
         let onVpn = geo.vpnName != nil || location?.isVpn == true
-        let wish = alibiWish
+        let wish = alibiPlace
         syncRegion(wish: wish, location: location, onVpn: onVpn)
         guard let home = settings.homeTimeZone, !TimeZoneHelper.automaticIsOn,
               let target = timeZoneTarget(wish: wish, exitZone: location?.timeZone, onVpn: onVpn, connectionKnown: location != nil, home: home),
@@ -168,7 +168,7 @@ extension Monitor {
         }
         // Alibi's place may have moved while the helper ran, when a sync returns early: catch up once
         // this one is done (the task runs after `defer` clears the flag), rather than at the next check.
-        if alibiWish != wish { Task { await syncTimeZone() } }
+        if alibiPlace != wish { Task { await syncTimeZone() } }
     }
 
     private func syncRegion(wish: AlibiWish?, location: Location?, onVpn: Bool) {
@@ -185,6 +185,11 @@ extension Monitor {
             : target == wish?.country ? "Mac region set to \(name), Alibi's location."
             : "Mac region set to \(name) to match your connection.")
     }
+}
+
+/// Alibi's place, for the Mac to follow: only while matching is on and asked to follow Alibi too.
+func followedPlace(_ wish: AlibiWish?, _ s: AppSettings) -> AlibiWish? {
+    s.matchTimeZone && s.followAlibi ? wish : nil
 }
 
 /// Where the Mac's clock should be. A place Alibi has you in for all sites comes first; otherwise,
