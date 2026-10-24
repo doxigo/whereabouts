@@ -6,9 +6,10 @@ import Foundation
 // Chrome hangs up or the app quits. Without a host, Alibi falls back to its own lookup once a minute.
 //
 // The host says hello first, and that it takes Alibi's cover. Alibi then sends its All sites cover
-// whenever it changes (`{"cover": …}`), which the host keeps in alibi-cover.json for the app: with
-// Match time zone on, the Mac's clock follows the place Alibi has you in. The host tells Alibi the zone
-// the app holds the Mac on (`{"system": …}`), so Alibi leaves that zone to the Mac rather than faking it.
+// whenever it changes (`{"cover": …}`). Each host keeps the one it heard in alibi-cover-<pid>.json and
+// deletes it as it exits; the app skips any whose host is gone. With Match time zone and Follow Alibi's
+// location on, the Mac's clock follows the place Alibi has you in. The host tells Alibi the zone the app
+// holds the Mac on (`{"system": …}`), for Alibi's popup; Alibi keeps covering the zone itself.
 
 /// What Alibi's "Match my IP address" cover is made of, built the way Alibi's own lookup builds it.
 struct AlibiCover: Codable, Equatable {
