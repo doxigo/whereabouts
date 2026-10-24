@@ -262,6 +262,13 @@ func selfTest() {
     check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"","timezone":"Etc/GMT-1"}}"#.utf8)) == nil, "a cover with no kind is refused")
     check(alibiWish(fromMessage: Data(#"{"something":"else"}"#.utf8)) == nil && alibiWish(fromMessage: Data("[".utf8)) == nil, "other messages aren't covers")
     check(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil).country == nil, "a place without a locale names no country")
+    // Foundation takes zones the helper refuses; the Mac can't be held on those, so they name no place.
+    for zone in ["EST5EDT", "GMT+0330", "Etc", "../etc/localtime", "Etc/GMT-1/a/b", "Etc//UTC", ""] {
+        check(!TimeZoneHelper.accepts(zone), "the helper refuses \(zone)")
+    }
+    check(TimeZoneHelper.accepts("Etc/GMT-1") && TimeZoneHelper.accepts("Etc/UTC"), "the helper takes zone database names")
+    check(TimeZone(identifier: "GMT+0330") != nil && AlibiWish(configuration: "custom", timezone: "GMT+0330", locale: nil).zone == nil,
+          "a zone only Foundation takes names no place")
     // Alibi in more than one browser or profile, each with a host and a file of its own: the newest place wins,
     // and Off or Match my IP address in one never outvotes a place in another.
     let stockholm = AlibiWish(configuration: "stockholm", timezone: "Etc/GMT-1", locale: "sv-SE")
