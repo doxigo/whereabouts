@@ -246,7 +246,9 @@ func selfTest() {
           == AlibiCover(timezone: "Etc/GMT-1", locale: "sv-SE", lat: 59.3, lon: 18.1), "Alibi cover takes the country's language")
     check(alibiCover(Location(countryCode: "SE", timeZone: "Nowhere/Else")) == nil, "no cover without a real zone")
     check(nativeMessage(Data("{}".utf8)) == Data([2, 0, 0, 0]) + Data("{}".utf8), "native message length prefix")
-    check(String(decoding: AlibiHost.helloMessage(), as: UTF8.self) == #"{"accepts":["cover"],"hello":"whereabouts"}"#, "hello says it takes Alibi's cover")
+    check(String(decoding: AlibiHost.helloMessage(takesCovers: true), as: UTF8.self) == #"{"accepts":["cover"],"hello":"whereabouts"}"#, "hello says it takes Alibi's cover")
+    check(String(decoding: AlibiHost.helloMessage(takesCovers: false), as: UTF8.self) == #"{"accepts":[],"hello":"whereabouts"}"#,
+          "hello says it takes no cover while the app doesn't follow Alibi")
     check(String(decoding: AlibiHost.systemMessage("Etc/GMT-1"), as: UTF8.self) == #"{"system":"Etc/GMT-1"}"#, "system zone")
     check(String(decoding: AlibiHost.systemMessage(nil), as: UTF8.self) == #"{"system":null}"#, "no system zone is null, not left out")
 

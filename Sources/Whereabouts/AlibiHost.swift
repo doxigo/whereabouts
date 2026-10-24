@@ -5,11 +5,13 @@ import Foundation
 // (`Whereabouts chrome-extension://<id>/`), which sends that cover, then every change to it, until
 // Chrome hangs up or the app quits. Without a host, Alibi falls back to its own lookup once a minute.
 //
-// The host says hello first, and that it takes Alibi's cover. Alibi then sends its All sites cover
-// whenever it changes (`{"cover": …}`). Each host keeps the one it heard in alibi-cover-<pid>.json and
-// deletes it as it exits; the app skips any whose host is gone. With Match time zone and Follow Alibi's
-// location on, the Mac's clock follows the place Alibi has you in. The host tells Alibi the zone the app
-// holds the Mac on (`{"system": …}`), for Alibi's popup; Alibi keeps covering the zone itself.
+// The host says hello first, and whether it takes Alibi's cover: only while the app follows Alibi's
+// location, so Alibi doesn't keep the port open for nothing. It says hello again if that changes. Alibi
+// then sends its All sites cover whenever it changes (`{"cover": …}`). Each host keeps the one it heard
+// in alibi-cover-<pid>.json and deletes it as it exits; the app skips any whose host is gone. With Match
+// time zone and Follow Alibi's location on, the Mac's clock follows the place Alibi has you in. The host
+// tells Alibi the zone the app holds the Mac on (`{"system": …}`), for Alibi's popup; Alibi keeps
+// covering the zone itself.
 
 /// What Alibi's "Match my IP address" cover is made of, built the way Alibi's own lookup builds it.
 struct AlibiCover: Codable, Equatable {
@@ -155,10 +157,18 @@ enum AlibiHost {
         return pickWish(heard)
     }
 
-    /// The first message: what this host is, and that it takes Alibi's cover.
-    static func helloMessage() -> Data {
-        struct Hello: Encodable { var hello = "whereabouts"; var accepts = ["cover"] }
-        return encoded(Hello())
+    /// The first message: what this host is, and whether it takes Alibi's cover now.
+    static func helloMessage(takesCovers: Bool) -> Data {
+        struct Hello: Encodable { var hello = "whereabouts"; var accepts: [String] }
+        return encoded(Hello(accepts: takesCovers ? ["cover"] : []))
+    }
+
+    /// Whether the app follows Alibi's location now, as its settings say: Match time zone and Follow
+    /// Alibi's location both on. Only then does Alibi's cover move the Mac.
+    static func followsAlibi() -> Bool {
+        guard let data = try? Data(contentsOf: Store.settingsURL),
+              let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else { return false }
+        return settings.matchTimeZone && settings.followAlibi
     }
 
     /// The zone the app holds the Mac on, as `{"system": "…"}`, or `{"system": null}` for none.
@@ -202,7 +212,8 @@ enum AlibiHost {
         func say(_ json: Data) {
             do { try FileHandle.standardOutput.write(contentsOf: nativeMessage(json)) } catch { leave() }
         }
-        say(helloMessage())
+        var takes = followsAlibi()
+        say(helloMessage(takesCovers: takes))
         // Alibi's messages, each a native message; Chrome hangs up by closing stdin.
         Thread.detachNewThread {
             let input = FileHandle.standardInput
@@ -221,7 +232,7 @@ enum AlibiHost {
                 }
                 let body = input.readData(ofLength: left)
                 guard body.count == left else { leave() }
-                if let wish = alibiWish(fromMessage: body),
+                if let wish = alibiWish(fromMessage: body), followsAlibi(),
                    let data = try? JSONEncoder().encode(AlibiHeard(pid: getpid(), heard: Date(), cover: wish)) {
                     try? FileManager.default.createDirectory(at: Store.dir, withIntermediateDirectories: true)
                     try? data.write(to: mine, options: .atomic)
@@ -249,6 +260,14 @@ enum AlibiHost {
             if sentSystem != .some(exit.system) {
                 say(systemMessage(exit.system))
                 sentSystem = .some(exit.system)
+            }
+            // The settings live in the same folder: switched in Settings, Alibi hears hello again, and
+            // opens or closes the port to suit.
+            let follows = followsAlibi()
+            if follows != takes {
+                takes = follows
+                if !follows { try? FileManager.default.removeItem(at: mine) }
+                say(helloMessage(takesCovers: follows))
             }
         }
         // Atomic writes swap the file, so watch its folder. Other files there change too; what was sent filters those out.
