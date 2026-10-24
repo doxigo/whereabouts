@@ -262,6 +262,21 @@ func selfTest() {
     check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"","timezone":"Etc/GMT-1"}}"#.utf8)) == nil, "a cover with no kind is refused")
     check(alibiWish(fromMessage: Data(#"{"something":"else"}"#.utf8)) == nil && alibiWish(fromMessage: Data("[".utf8)) == nil, "other messages aren't covers")
     check(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil).country == nil, "a place without a locale names no country")
+    // Alibi in more than one browser or profile, each with a host and a file of its own: the newest place wins,
+    // and Off or Match my IP address in one never outvotes a place in another.
+    let stockholm = AlibiWish(configuration: "stockholm", timezone: "Etc/GMT-1", locale: "sv-SE")
+    let further = AlibiWish(configuration: "custom", timezone: "Etc/GMT-9", locale: nil)
+    let quiet = AlibiWish(configuration: "browserDefault", timezone: nil, locale: nil)
+    let early = Date(timeIntervalSince1970: 1_761_217_200), late = early.addingTimeInterval(60)
+    check(pickWish([AlibiHeard(pid: 1, heard: early, cover: stockholm), AlibiHeard(pid: 2, heard: late, cover: quiet)]) == stockholm,
+          "Off in another browser leaves a place alone")
+    check(pickWish([AlibiHeard(pid: 1, heard: early, cover: stockholm), AlibiHeard(pid: 2, heard: late, cover: further)]) == further
+          && pickWish([AlibiHeard(pid: 2, heard: late, cover: further), AlibiHeard(pid: 1, heard: early, cover: stockholm)]) == further,
+          "the newest place wins")
+    check(pickWish([AlibiHeard(pid: 1, heard: late, cover: quiet)]) == nil && pickWish([]) == nil, "no place, nothing for the Mac")
+    let file = try? JSONDecoder().decode(AlibiHeard.self, from: JSONEncoder().encode(AlibiHeard(pid: 7, heard: early, cover: stockholm)))
+    check(file == AlibiHeard(pid: 7, heard: early, cover: stockholm), "a host's file reads back")
+    check(AlibiHost.wishURL(pid: 7).lastPathComponent == "alibi-cover-7.json", "a file per host")
     // Alibi's place counts only with Match time zone and Follow Alibi's location both on; the second is off by default.
     var matching = AppSettings()
     matching.matchTimeZone = true

@@ -46,6 +46,19 @@ struct AlibiWish: Codable, Equatable {
     }
 }
 
+/// One host's word: the cover its browser last sent, and when. The pid says whether that host still runs.
+struct AlibiHeard: Codable, Equatable {
+    var pid: Int32
+    var heard: Date
+    var cover: AlibiWish
+}
+
+/// The cover the Mac follows, from every running browser's: the newest one that names a place. Off and
+/// Match my IP address ask nothing of the Mac, so they never outvote another browser's place. nil: no place.
+func pickWish(_ heard: [AlibiHeard]) -> AlibiWish? {
+    heard.filter { $0.cover.zone != nil }.max { $0.heard < $1.heard }?.cover
+}
+
 /// Alibi's All sites cover from one of its messages; nil for any other message, or one malformed.
 func alibiWish(fromMessage data: Data) -> AlibiWish? {
     struct Message: Decodable { var cover: AlibiWish? }
@@ -63,8 +76,12 @@ enum AlibiHost {
     /// Alibi's ID wherever it's loaded from, pinned by the `key` in its manifest.json.
     static let origin = "chrome-extension://dhlpjjenplighmpbogjpmljbahbnjpfa/"
     static let exitURL = Store.dir.appendingPathComponent("alibi.json")
-    /// Alibi's All sites cover, as the host last heard it.
-    static let wishURL = Store.dir.appendingPathComponent("alibi-cover.json")
+    /// Alibi's All sites cover, as one host heard it: a file per host, so two browsers don't overwrite
+    /// each other. The host deletes its own as it exits.
+    static func wishURL(pid: Int32) -> URL { Store.dir.appendingPathComponent("alibi-cover-\(pid).json") }
+    /// One file for every host, from before each host had its own, with nothing to say whether its
+    /// browser still runs. Deleted at launch.
+    static let oldWishURL = Store.dir.appendingPathComponent("alibi-cover.json")
     /// The pid tells the host whether the app that wrote the file is still running. The exit, once
     /// known; the zone the app holds the Mac on for Alibi, if it holds one.
     private struct Exit: Codable, Equatable { var pid: Int32; var cover: AlibiCover?; var system: String? }
@@ -93,7 +110,10 @@ enum AlibiHost {
     }
 
     /// Says the app runs, before its first check, so Alibi's cover reaches it from the start.
-    @MainActor static func announce() { write() }
+    @MainActor static func announce() {
+        if !Demo.enabled { try? FileManager.default.removeItem(at: oldWishURL) }
+        write()
+    }
 
     /// Hands a new exit to the host, if it moved.
     @MainActor static func publish(_ location: Location) {
@@ -114,10 +134,23 @@ enum AlibiHost {
         if (try? data.write(to: exitURL, options: .atomic)) != nil { written = current }
     }
 
-    /// Alibi's All sites cover, as the host kept it; nil before Alibi has said.
+    /// Alibi's place for all sites, from the hosts of the browsers running now (pickWish); nil when none
+    /// names one. A host killed outright leaves its file behind: that's deleted here, once its pid is gone.
     static func readWish() -> AlibiWish? {
-        guard let data = try? Data(contentsOf: wishURL) else { return nil }
-        return try? JSONDecoder().decode(AlibiWish.self, from: data)
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: Store.dir.path) else { return nil }
+        var heard: [AlibiHeard] = []
+        for name in names where name.hasPrefix("alibi-cover-") && name.hasSuffix(".json") {
+            let url = Store.dir.appendingPathComponent(name)
+            // One that doesn't read may be mid-write: left alone.
+            guard let data = try? Data(contentsOf: url), let one = try? JSONDecoder().decode(AlibiHeard.self, from: data) else { continue }
+            guard kill(one.pid, 0) == 0 else {
+                try? fm.removeItem(at: url)
+                continue
+            }
+            heard.append(one)
+        }
+        return pickWish(heard)
     }
 
     /// The first message: what this host is, and that it takes Alibi's cover.
@@ -147,28 +180,49 @@ enum AlibiHost {
 
     /// Host mode, Chrome's end of the pipe.
     static func serve() -> Never {
-        FileHandle.standardOutput.write(nativeMessage(helloMessage()))
+        let mine = wishURL(pid: getpid())
+        // Every way out takes this host's cover with it, so the Mac never stays on a place that a
+        // closed browser, or a removed Alibi, asked for.
+        func leave() -> Never {
+            try? FileManager.default.removeItem(at: mine)
+            Darwin.exit(0)
+        }
+        // Chrome stops a host with SIGTERM (SIGKILL after a while, which readWish cleans up after). A write
+        // to a pipe Chrome has closed fails instead of raising SIGPIPE, and the host leaves.
+        signal(SIGPIPE, SIG_IGN)
+        let stops = [SIGTERM, SIGINT, SIGHUP].map { number in
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler { leave() }
+            source.resume()
+            return source
+        }
+        func say(_ json: Data) {
+            do { try FileHandle.standardOutput.write(contentsOf: nativeMessage(json)) } catch { leave() }
+        }
+        say(helloMessage())
         // Alibi's messages, each a native message; Chrome hangs up by closing stdin.
         Thread.detachNewThread {
             let input = FileHandle.standardInput
             while true {
                 let head = input.readData(ofLength: 4)
-                guard head.count == 4 else { exit(0) }
+                guard head.count == 4 else { leave() }
                 var left = Int(head.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
                 guard left <= 64 << 10 else {
                     // Far beyond anything Alibi sends: skip it.
                     while left > 0 {
                         let chunk = input.readData(ofLength: min(left, 64 << 10))
-                        guard !chunk.isEmpty else { exit(0) }
+                        guard !chunk.isEmpty else { leave() }
                         left -= chunk.count
                     }
                     continue
                 }
                 let body = input.readData(ofLength: left)
-                guard body.count == left else { exit(0) }
-                if let wish = alibiWish(fromMessage: body), let data = try? JSONEncoder().encode(wish) {
+                guard body.count == left else { leave() }
+                if let wish = alibiWish(fromMessage: body),
+                   let data = try? JSONEncoder().encode(AlibiHeard(pid: getpid(), heard: Date(), cover: wish)) {
                     try? FileManager.default.createDirectory(at: Store.dir, withIntermediateDirectories: true)
-                    try? data.write(to: wishURL, options: .atomic)
+                    try? data.write(to: mine, options: .atomic)
                 }
             }
         }
@@ -180,18 +234,18 @@ enum AlibiHost {
         func send() {
             // With the app not running there's nothing current to say. Hanging up hands Alibi back to its own lookup.
             guard let data = try? Data(contentsOf: exitURL), let exit = try? JSONDecoder().decode(Exit.self, from: data),
-                  kill(exit.pid, 0) == 0 else { Darwin.exit(0) }
+                  kill(exit.pid, 0) == 0 else { leave() }
             if appQuit == nil {
                 appQuit = DispatchSource.makeProcessSource(identifier: exit.pid, eventMask: .exit, queue: .main)
-                appQuit?.setEventHandler { Darwin.exit(0) }
+                appQuit?.setEventHandler { leave() }
                 appQuit?.resume()
             }
             if let cover = exit.cover.flatMap({ try? encoder.encode($0) }), cover != sent {
-                FileHandle.standardOutput.write(nativeMessage(cover))
+                say(cover)
                 sent = cover
             }
             if sentSystem != .some(exit.system) {
-                FileHandle.standardOutput.write(nativeMessage(systemMessage(exit.system)))
+                say(systemMessage(exit.system))
                 sentSystem = .some(exit.system)
             }
         }
@@ -200,6 +254,6 @@ enum AlibiHost {
         watch.setEventHandler { send() }
         watch.resume()
         send()
-        dispatchMain()
+        withExtendedLifetime((watch, stops)) { dispatchMain() }
     }
 }

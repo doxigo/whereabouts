@@ -175,11 +175,18 @@ final class Monitor {
     }
 
     private func alibiWishChanged() {
+        if rereadAlibiWish() && settings.matchTimeZone && settings.followAlibi { Task { await syncTimeZone() } }
+    }
+
+    /// Reads Alibi's cover from its hosts' files again, and says whether it changed. Each check does
+    /// this too: a host Chrome killed outright leaves its file behind, and the folder doesn't change.
+    @discardableResult
+    func rereadAlibiWish() -> Bool {
         let wish = AlibiHost.readWish()
-        guard wish != alibiWish else { return }
+        guard wish != alibiWish else { return false }
         alibiWish = wish
         log.info("Alibi's location for all sites: \(wish?.zone ?? "none, so the connection's")")
-        if settings.matchTimeZone && settings.followAlibi { Task { await syncTimeZone() } }
+        return true
     }
 
     private func syncLoginItem() {
@@ -445,6 +452,7 @@ final class Monitor {
         // Only a real "safe" is clear — offline is exactly what an engaged block looks like.
         reportTriggerState("geo", status.kind == .violation ? .violating : status.kind == .safe ? .clear : .unknown)
         fireGeoAlerts(status, becameViolation: becameViolation, recovered: recovered, ispChangedTo: ispChangedTo)
+        rereadAlibiWish()
         if settings.matchTimeZone { Task { await syncTimeZone() } }
         prevKind = status.kind
         prevCode = code
