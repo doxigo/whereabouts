@@ -317,10 +317,19 @@ func selfTest() {
     var following = AppSettings()
     following.matchTimeZone = true
     let onPlace = MacFacts(timeZone: "Etc/GMT-1", automaticZone: false, region: "SE")
-    check(consistencyWarnings(location: exitZoned, onVpn: true, mac: onPlace, settings: following, matchFailing: false, alibiCountry: "SE")
-        .map(\.kind) == [.timeZone], "Alibi's place in another country than the connection")
-    check(consistencyWarnings(location: exitZoned, onVpn: true, mac: onPlace, settings: following, matchFailing: false, alibiCountry: "XB")
-        .isEmpty, "Alibi's place in the connection's country")
+    func warned(_ place: AlibiWish, at loc: Location = exitZoned) -> [ConsistencyKind] {
+        consistencyWarnings(location: loc, onVpn: true, mac: onPlace, settings: following, matchFailing: false, alibiPlace: place).map(\.kind)
+    }
+    check(warned(stockholm) == [.timeZone], "Alibi's place in another country than the connection")
+    var exitInSweden = exitZoned
+    exitInSweden.countryCode = "SE"
+    check(warned(stockholm, at: exitInSweden).isEmpty, "Alibi's place in the connection's country")
+    // A custom cover with a zone and no locale names no country: its zone against the exit's.
+    let zoneOnly = AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil)
+    var exitElsewhere = exitZoned
+    exitElsewhere.timeZone = "Etc/GMT-2"
+    check(warned(zoneOnly, at: exitElsewhere) == [.timeZone], "a place without a country on another zone than the exit")
+    check(warned(zoneOnly).isEmpty, "a place without a country on the exit's zone")
 
     // status.json: git-ip-guard reads these exact names. Whole seconds; unknowns left out.
     let regional = Location(ip: "198.51.100.1", country: "Exit Country", countryCode: "XB", region: "Exit Region", isp: "Tunnel Provider AB", isVpn: true)
