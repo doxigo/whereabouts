@@ -178,6 +178,11 @@ struct LocationSettings: View {
             }
             // Fighting Location Services would flip the zone back and forth.
             .disabled(automaticZone && !m.settings.matchTimeZone)
+            Toggle(isOn: m.binding(\.followAlibi)) {
+                Text("Follow Alibi's location")
+                Text("With Alibi on a place for all sites (Tokyo, say), the Mac uses that place's time zone and region instead, so calendar, logs and scheduled jobs move there too. Off and Match my IP address in Alibi leave it to the connection.")
+            }
+            .disabled(!m.settings.matchTimeZone)
             if automaticZone {
                 LabeledContent {
                     Button("Open Date & Time") {
@@ -201,6 +206,9 @@ struct LocationSettings: View {
                 }
             }
             LabeledContent("Mac is set to", value: zoneName(m.systemTimeZone))
+            if let zone = m.alibiPlace?.zone {
+                LabeledContent("Alibi's location", value: zoneName(zone))
+            }
             if let error = m.timeZoneError {
                 Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
             }

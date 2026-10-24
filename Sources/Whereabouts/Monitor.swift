@@ -27,6 +27,10 @@ final class Monitor {
     private(set) var pausedUntil: Date?
     var systemTimeZone = TimeZone.current.identifier
     var timeZoneError: String?
+    /// Alibi's All sites cover, as its host last heard it.
+    var alibiWish = AlibiHost.readWish()
+    /// The place the Mac's clock follows: Alibi's, with Match time zone and Follow Alibi's location on.
+    var alibiPlace: AlibiWish? { followedPlace(alibiWish, settings) }
 
     var leaking: Bool { leak.ipv6.state == .leak || leak.dns.state == .leak }
     var edgeLineVisible: Bool {
@@ -63,6 +67,7 @@ final class Monitor {
     @ObservationIgnored private var pauseTask: Task<Void, Never>?
     @ObservationIgnored var reblockTask: Task<Void, Never>?
     @ObservationIgnored private var netDebounce: Task<Void, Never>?
+    @ObservationIgnored private var wishWatch: DispatchSourceFileSystemObject?
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
     @ObservationIgnored private var pathSatisfied = true
     @ObservationIgnored private var pathSeen = false
@@ -83,6 +88,8 @@ final class Monitor {
     func start() {
         if Demo.enabled { Demo.apply(to: self); return }
         AlibiHost.install()
+        AlibiHost.announce()
+        watchAlibiWish()
         syncLoginItem()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         Task { await refreshKillSwitchState() }
@@ -141,7 +148,8 @@ final class Monitor {
             Task { await checkSite() }
         }
         if !interval && (old.ipv6Check != next.ipv6Check || old.dnsCheck != next.dnsCheck) { Task { await checkLeaks() } }
-        if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion) {
+        if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion
+            || old.followAlibi != next.followAlibi) {
             Task { await syncTimeZone() }
         }
         if old.checkUpdates != next.checkUpdates || old.installUpdates != next.installUpdates { Task { await checkForUpdate() } }
@@ -149,6 +157,36 @@ final class Monitor {
         if old.shareStatus != next.shareStatus {
             if next.shareStatus { Task { await checkGeo() } } else { StatusFile.remove() }
         }
+    }
+
+    /// Alibi's host keeps the All sites cover in the app's folder. Atomic writes swap the file, so
+    /// watch the folder; other files there change too, and an unchanged cover is ignored.
+    private func watchAlibiWish() {
+        try? FileManager.default.createDirectory(at: Store.dir, withIntermediateDirectories: true)
+        let folder = open(Store.dir.path, O_EVTONLY)
+        guard folder >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: folder, eventMask: .write, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.alibiWishChanged() }
+        }
+        source.setCancelHandler { close(folder) }
+        source.resume()
+        wishWatch = source
+    }
+
+    private func alibiWishChanged() {
+        if rereadAlibiWish() && settings.matchTimeZone && settings.followAlibi { Task { await syncTimeZone() } }
+    }
+
+    /// Reads Alibi's cover from its hosts' files again, and says whether it changed. Each check does
+    /// this too: a host Chrome killed outright leaves its file behind, and the folder doesn't change.
+    @discardableResult
+    func rereadAlibiWish() -> Bool {
+        let wish = AlibiHost.readWish()
+        guard wish != alibiWish else { return false }
+        alibiWish = wish
+        log.info("Alibi's location for all sites: \(wish?.zone ?? "none, so the connection's")")
+        return true
     }
 
     private func syncLoginItem() {
@@ -414,6 +452,7 @@ final class Monitor {
         // Only a real "safe" is clear — offline is exactly what an engaged block looks like.
         reportTriggerState("geo", status.kind == .violation ? .violating : status.kind == .safe ? .clear : .unknown)
         fireGeoAlerts(status, becameViolation: becameViolation, recovered: recovered, ispChangedTo: ispChangedTo)
+        rereadAlibiWish()
         if settings.matchTimeZone { Task { await syncTimeZone() } }
         prevKind = status.kind
         prevCode = code

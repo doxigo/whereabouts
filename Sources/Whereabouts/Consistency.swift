@@ -20,10 +20,26 @@ struct MacFacts {
     var region: String?
 }
 
-func consistencyWarnings(location: Location?, onVpn: Bool, mac: MacFacts, settings s: AppSettings, matchFailing: Bool) -> [ConsistencyWarning] {
+/// `alibiPlace`: the place Alibi has the Mac's clock on, while Match time zone follows it.
+func consistencyWarnings(location: Location?, onVpn: Bool, mac: MacFacts, settings s: AppSettings, matchFailing: Bool,
+                         alibiPlace: AlibiWish? = nil) -> [ConsistencyWarning] {
     var warnings: [ConsistencyWarning] = []
     // A working Match time zone corrects the zone within the same check, so only a stuck one counts.
     let matchHandles = s.matchTimeZone && !matchFailing && !mac.automaticZone
+    // Unless it's matching Alibi's place, and that's somewhere the connection isn't: the Mac does
+    // what was asked, and a site can still compare the two. A place whose locale names no country
+    // (a custom zone, say) goes by its zone against the exit's.
+    if s.warnTimeZone, matchHandles, let place = alibiPlace, let zone = place.zone, let loc = location {
+        let elsewhere: Bool
+        if let country = place.country, let code = loc.countryCode { elsewhere = country.uppercased() != code.uppercased() }
+        else if let exit = loc.timeZone { elsewhere = exit != zone }
+        else { elsewhere = false }
+        if elsewhere {
+            let named = place.country.map { " in \(Countries.name($0) ?? $0)" } ?? ""
+            warnings.append(ConsistencyWarning(kind: .timeZone, title: "Alibi's location differs from your connection",
+                                               detail: "Your Mac is on \(zoneName(mac.timeZone)) for Alibi's location\(named), your connection is in \(loc.place).\nChoose Match my IP address in Alibi, or a place in your connection's country."))
+        }
+    }
     // ponytail: identifiers compared as-is, so an alias pair (Europe/Kiev vs Europe/Kyiv) reads as a mismatch.
     if s.warnTimeZone, onVpn, !matchHandles, let loc = location, let exit = loc.timeZone, exit != mac.timeZone {
         let fix = mac.automaticZone ? "Turn off automatic time zone, then use Match time zone in Settings › Location."
@@ -70,7 +86,7 @@ extension Monitor {
         let mac = MacFacts(timeZone: systemTimeZone, automaticZone: TimeZoneHelper.automaticIsOn,
                            region: Locale.autoupdatingCurrent.region?.identifier)
         return consistencyWarnings(location: loc, onVpn: geo.vpnName != nil || loc?.isVpn == true, mac: mac,
-                                   settings: settings, matchFailing: timeZoneError != nil)
+                                   settings: settings, matchFailing: timeZoneError != nil, alibiPlace: alibiPlace)
     }
 
     /// Notifies once when a warning appears; the menu lists it for as long as it lasts.

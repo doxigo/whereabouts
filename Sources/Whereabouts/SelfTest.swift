@@ -246,6 +246,92 @@ func selfTest() {
           == AlibiCover(timezone: "Etc/GMT-1", locale: "sv-SE", lat: 59.3, lon: 18.1), "Alibi cover takes the country's language")
     check(alibiCover(Location(countryCode: "SE", timeZone: "Nowhere/Else")) == nil, "no cover without a real zone")
     check(nativeMessage(Data("{}".utf8)) == Data([2, 0, 0, 0]) + Data("{}".utf8), "native message length prefix")
+    check(String(decoding: AlibiHost.helloMessage(takesCovers: true), as: UTF8.self) == #"{"accepts":["cover"],"hello":"whereabouts"}"#, "hello says it takes Alibi's cover")
+    check(String(decoding: AlibiHost.helloMessage(takesCovers: false), as: UTF8.self) == #"{"accepts":[],"hello":"whereabouts"}"#,
+          "hello says it takes no cover while the app doesn't follow Alibi")
+    check(String(decoding: AlibiHost.systemMessage("Etc/GMT-1"), as: UTF8.self) == #"{"system":"Etc/GMT-1"}"#, "system zone")
+    check(String(decoding: AlibiHost.systemMessage(nil), as: UTF8.self) == #"{"system":null}"#, "no system zone is null, not left out")
+
+    // Alibi's All sites cover, for the Mac's clock. Its zone and locale: a fixed-offset zone, Sweden's language.
+    let place = alibiWish(fromMessage: Data(#"{"cover":{"configuration":"stockholm","timezone":"Etc/GMT-1","locale":"sv-SE"}}"#.utf8))
+    check(place == AlibiWish(configuration: "stockholm", timezone: "Etc/GMT-1", locale: "sv-SE"), "Alibi's cover read")
+    check(place?.zone == "Etc/GMT-1" && place?.country == "SE", "a place's zone and country")
+    let off = alibiWish(fromMessage: Data(#"{"cover":{"configuration":"browserDefault","timezone":null,"locale":null}}"#.utf8))
+    check(off != nil && off?.zone == nil && off?.country == nil, "Alibi off names no place")
+    let byIp = alibiWish(fromMessage: Data(#"{"cover":{"configuration":"ipAddress","timezone":"Etc/GMT-1","locale":"sv-SE"}}"#.utf8))
+    check(byIp != nil && byIp?.zone == nil, "Match my IP address leaves the clock to the connection")
+    check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"x","timezone":"Nowhere/Else"}}"#.utf8)) == nil, "a cover with no real zone is refused")
+    check(alibiWish(fromMessage: Data(#"{"cover":{"configuration":"","timezone":"Etc/GMT-1"}}"#.utf8)) == nil, "a cover with no kind is refused")
+    check(alibiWish(fromMessage: Data(#"{"something":"else"}"#.utf8)) == nil && alibiWish(fromMessage: Data("[".utf8)) == nil, "other messages aren't covers")
+    check(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil).country == nil, "a place without a locale names no country")
+    // Foundation takes zones the helper refuses; the Mac can't be held on those, so they name no place.
+    for zone in ["EST5EDT", "GMT+0330", "Etc", "../etc/localtime", "Etc/GMT-1/a/b", "Etc//UTC", ""] {
+        check(!TimeZoneHelper.accepts(zone), "the helper refuses \(zone)")
+    }
+    check(TimeZoneHelper.accepts("Etc/GMT-1") && TimeZoneHelper.accepts("Etc/UTC"), "the helper takes zone database names")
+    check(TimeZone(identifier: "GMT+0330") != nil && AlibiWish(configuration: "custom", timezone: "GMT+0330", locale: nil).zone == nil,
+          "a zone only Foundation takes names no place")
+    // Alibi in more than one browser or profile, each with a host and a file of its own: the newest place wins,
+    // and Off or Match my IP address in one never outvotes a place in another.
+    let stockholm = AlibiWish(configuration: "stockholm", timezone: "Etc/GMT-1", locale: "sv-SE")
+    let further = AlibiWish(configuration: "custom", timezone: "Etc/GMT-9", locale: nil)
+    let quiet = AlibiWish(configuration: "browserDefault", timezone: nil, locale: nil)
+    let early = Date(timeIntervalSince1970: 1_761_217_200), late = early.addingTimeInterval(60)
+    check(pickWish([AlibiHeard(pid: 1, heard: early, cover: stockholm), AlibiHeard(pid: 2, heard: late, cover: quiet)]) == stockholm,
+          "Off in another browser leaves a place alone")
+    check(pickWish([AlibiHeard(pid: 1, heard: early, cover: stockholm), AlibiHeard(pid: 2, heard: late, cover: further)]) == further
+          && pickWish([AlibiHeard(pid: 2, heard: late, cover: further), AlibiHeard(pid: 1, heard: early, cover: stockholm)]) == further,
+          "the newest place wins")
+    check(pickWish([AlibiHeard(pid: 1, heard: late, cover: quiet)]) == nil && pickWish([]) == nil, "no place, nothing for the Mac")
+    let file = try? JSONDecoder().decode(AlibiHeard.self, from: JSONEncoder().encode(AlibiHeard(pid: 7, heard: early, cover: stockholm)))
+    check(file == AlibiHeard(pid: 7, heard: early, cover: stockholm), "a host's file reads back")
+    check(AlibiHost.wishURL(pid: 7).lastPathComponent == "alibi-cover-7.json", "a file per host")
+    // Alibi's place counts only with Match time zone and Follow Alibi's location both on; the second is off by default.
+    var matching = AppSettings()
+    matching.matchTimeZone = true
+    check(followedPlace(place, matching) == nil, "Follow Alibi's location starts off")
+    var alibiOnly = AppSettings()
+    alibiOnly.followAlibi = true
+    check(followedPlace(place, alibiOnly) == nil, "following Alibi needs Match time zone")
+    matching.followAlibi = true
+    check(followedPlace(place, matching) == place, "both on: the Mac follows Alibi's place")
+    let saved = try? JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(matching))
+    check(saved?.followAlibi == true && (try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8)))?.followAlibi == false,
+          "Follow Alibi's location is saved, and off when settings.json doesn't say")
+    // Where the clock goes: Alibi's place first, otherwise as before. Off asks nothing of the Mac.
+    func zoneFor(_ wish: AlibiWish?, vpn: Bool = true, known: Bool = true) -> String? {
+        timeZoneTarget(wish: wish, exitZone: "Etc/GMT-2", onVpn: vpn, connectionKnown: known, home: "GMT+0330")
+    }
+    check(zoneFor(place) == "Etc/GMT-1", "Alibi's place wins over the exit")
+    check(zoneFor(place, vpn: false, known: false) == "Etc/GMT-1", "Alibi's place needs no connection")
+    check(zoneFor(off) == "Etc/GMT-2" && zoneFor(byIp) == "Etc/GMT-2" && zoneFor(nil) == "Etc/GMT-2",
+          "Alibi off, Match my IP address, or no word from Alibi: the exit")
+    check(zoneFor(off, vpn: false) == "GMT+0330" && zoneFor(nil, vpn: false) == "GMT+0330", "no VPN: home, Alibi off or not")
+    check(zoneFor(nil, known: false) == nil && zoneFor(off, known: false) == nil, "no connection and no place: no answer yet")
+    func regionFor(_ wish: AlibiWish?, vpn: Bool = true) -> String? {
+        regionTarget(wish: wish, exitCountry: "XB", onVpn: vpn, connectionKnown: true, home: "XA")
+    }
+    check(regionFor(place) == "SE", "the region follows Alibi's place")
+    check(regionFor(AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil)) == "XA", "a place without a country keeps the home region")
+    check(regionFor(off) == "XB" && regionFor(byIp) == "XB" && regionFor(off, vpn: false) == "XA" && regionFor(nil, vpn: false) == "XA",
+          "region: the exit on a VPN, home without one, Alibi off or not")
+    // The Mac on Alibi's place, the connection somewhere else: a site can compare the two.
+    var following = AppSettings()
+    following.matchTimeZone = true
+    let onPlace = MacFacts(timeZone: "Etc/GMT-1", automaticZone: false, region: "SE")
+    func warned(_ place: AlibiWish, at loc: Location = exitZoned) -> [ConsistencyKind] {
+        consistencyWarnings(location: loc, onVpn: true, mac: onPlace, settings: following, matchFailing: false, alibiPlace: place).map(\.kind)
+    }
+    check(warned(stockholm) == [.timeZone], "Alibi's place in another country than the connection")
+    var exitInSweden = exitZoned
+    exitInSweden.countryCode = "SE"
+    check(warned(stockholm, at: exitInSweden).isEmpty, "Alibi's place in the connection's country")
+    // A custom cover with a zone and no locale names no country: its zone against the exit's.
+    let zoneOnly = AlibiWish(configuration: "custom", timezone: "Etc/GMT-1", locale: nil)
+    var exitElsewhere = exitZoned
+    exitElsewhere.timeZone = "Etc/GMT-2"
+    check(warned(zoneOnly, at: exitElsewhere) == [.timeZone], "a place without a country on another zone than the exit")
+    check(warned(zoneOnly).isEmpty, "a place without a country on the exit's zone")
 
     // status.json: git-ip-guard reads these exact names. Whole seconds; unknowns left out.
     let regional = Location(ip: "198.51.100.1", country: "Exit Country", countryCode: "XB", region: "Exit Region", isp: "Tunnel Provider AB", isVpn: true)
