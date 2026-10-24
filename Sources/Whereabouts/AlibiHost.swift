@@ -33,9 +33,10 @@ struct AlibiWish: Codable, Equatable {
 
     /// The zone of the place Alibi has you in, for the Mac to be held on. Off and "Match my IP address"
     /// name none: Alibi doesn't mind where the Mac is, so it follows the connection, as it does without Alibi.
+    /// Neither does a zone the time zone helper wouldn't set.
     var zone: String? {
         guard configuration != "browserDefault", configuration != "ipAddress", let timezone,
-              TimeZone(identifier: timezone) != nil else { return nil }
+              TimeZoneHelper.accepts(timezone) else { return nil }
         return timezone
     }
     /// That place's country, from its locale (sv-SE -> SE), for the Mac's region.

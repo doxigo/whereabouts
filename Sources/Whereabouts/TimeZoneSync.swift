@@ -48,6 +48,20 @@ enum TimeZoneHelper {
         _ = try await run("/usr/bin/sudo", ["-n", helperPath, zone], timeout: 15)
     }
 
+    /// Whether the helper takes `zone`, by its own test: a name of letters, then up to two parts of
+    /// letters, digits, _, + or -, naming a file in the zone database. Foundation takes more (EST5EDT,
+    /// GMT+0330), and the helper would refuse those on every check.
+    static func accepts(_ zone: String) -> Bool {
+        let letter = { (c: Character) in c.isASCII && c.isLetter }
+        let parts = zone.split(separator: "/", omittingEmptySubsequences: false)
+        guard (1...3).contains(parts.count), let first = parts.first, !first.isEmpty, first.allSatisfy(letter),
+              parts.dropFirst().allSatisfy({ part in
+                  !part.isEmpty && part.allSatisfy { letter($0) || ($0.isASCII && $0.isNumber) || "_+-".contains($0) }
+              }) else { return false }
+        var folder: ObjCBool = false
+        return FileManager.default.fileExists(atPath: "/usr/share/zoneinfo/\(zone)", isDirectory: &folder) && !folder.boolValue
+    }
+
     /// "Set time zone automatically using your current location": while it's on,
     /// macOS keeps switching the zone back. Asked of CoreTime, which System Settings
     /// uses — the old /Library/Preferences/com.apple.timezone.auto flag no longer
@@ -148,7 +162,8 @@ extension Monitor {
         // and Alibi keeps what it was told, rather than hearing "none" now and the zone again in a minute.
         guard let target = timeZoneTarget(wish: wish, exitZone: location?.timeZone, onVpn: onVpn, connectionKnown: location != nil, home: home)
         else { return }
-        guard TimeZone(identifier: target) != nil else { AlibiHost.publishSystem(nil); return }
+        // A zone the helper refuses is nothing the Mac can be held on, rather than a failure on every check.
+        guard TimeZoneHelper.accepts(target) else { AlibiHost.publishSystem(nil); return }
         guard !timeZoneInFlight else { return }
         refreshSystemTimeZone()
         guard target != systemTimeZone else { AlibiHost.publishSystem(target); return }
