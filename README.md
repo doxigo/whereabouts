@@ -43,7 +43,7 @@ When a check finds a new exit, the app writes its time zone, the country's most 
 
 The host also tells Alibi whether it takes Alibi's cover: while **Match my Mac's time zone and region** and **Follow Alibi's location** are both on, it first says `{"hello": "whereabouts", "accepts": ["cover"]}`, and otherwise the same with `"accepts": []`, so Alibi doesn't keep the port open for nothing. It says hello again when you switch them. Alibi then sends the configuration, time zone and locale of its **All sites** cover whenever they change, for example `{"cover": {"configuration": "tokyo", "timezone": "Asia/Tokyo", "locale": "ja-JP"}}`. Each host keeps the one it heard in a file of its own, `alibi-cover-<pid>.json`, and deletes it as it exits. The app skips, and deletes, any whose host is gone, so a closed browser or a removed Alibi never holds the Mac anywhere. With **Match my Mac's time zone and region** and **Follow Alibi's location** both on, a place moves the Mac to that place's zone and region. **Off** and **Match my IP address** ask nothing of the Mac, which follows the connection as it does without Alibi. With Alibi in more than one browser or profile, the newest place wins: Off or Match my IP address in one never outvotes a place in another, and closing a browser hands back to the others. A per-site cover stays in the browser, since the Mac has one clock. The host tells Alibi the zone the app holds the Mac on, `{"system": "Asia/Tokyo"}`, or `{"system": null}` while it holds none, for Alibi's popup to show; Alibi keeps covering the zone itself. Alibi Companion on Windows speaks the same protocol.
 
-To set it up, open Whereabouts once, then load an Alibi version with the pinned ID (see Alibi's README) and choose **Match my IP address**. A Chrome Web Store copy of Alibi has a different ID, so it isn't admitted.
+To set it up, open Whereabouts once, then load an Alibi version with the pinned ID (see Alibi's README) and choose **Match my IP address**. A Chrome Web Store copy of Alibi has a different ID, so it isn't admitted. For the Mac to follow a place you pick in Alibi, also turn on **Match my Mac's time zone and region** and **Follow Alibi's location** in Settings › Location. That needs an Alibi newer than 1.1.0. Older ones don't send their cover, so the Mac keeps following the connection.
 
 ### Reading the current location from other tools
 
@@ -130,6 +130,8 @@ The app has a built-in self-test for its rule logic (XCTest isn't part of Comman
 ```bash
 build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
 ```
+
+The [Build workflow](.github/workflows/build.yml) runs `./build.sh` and the self-test on a macOS 26 runner for every push to main and every pull request, so a break shows up before a release.
 
 ### Releasing
 
