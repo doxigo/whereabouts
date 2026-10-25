@@ -180,7 +180,7 @@ struct LocationSettings: View {
             .disabled(automaticZone && !m.settings.matchTimeZone)
             Toggle(isOn: m.binding(\.followAlibi)) {
                 Text("Follow Alibi's location")
-                Text("With Alibi on a place for all sites (Tokyo, say), the Mac uses that place's time zone and region instead, so calendar, logs and scheduled jobs move there too. Off and Match my IP address in Alibi leave it to the connection.")
+                Text("With Alibi on a place for all sites (Tokyo, say), the Mac uses that place's time zone and region instead, so calendar, logs and scheduled jobs move there too. Off and Match my IP address in Alibi leave it to the connection. If Alibi is already on a place, it notices the next time you open its popup.")
             }
             .disabled(!m.settings.matchTimeZone)
             if automaticZone {

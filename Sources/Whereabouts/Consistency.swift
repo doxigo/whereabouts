@@ -37,7 +37,7 @@ func consistencyWarnings(location: Location?, onVpn: Bool, mac: MacFacts, settin
         if elsewhere {
             let named = place.country.map { " in \(Countries.name($0) ?? $0)" } ?? ""
             warnings.append(ConsistencyWarning(kind: .timeZone, title: "Alibi's location differs from your connection",
-                                               detail: "Your Mac is on \(zoneName(mac.timeZone)) for Alibi's location\(named), your connection is in \(loc.place).\nChoose Match my IP address in Alibi, or a place in your connection's country."))
+                                               detail: "Your Mac is on \(zoneName(mac.timeZone)) for Alibi's location\(named), your connection is in \(loc.place).\nChoose Match my IP address in Alibi, a place in your connection's country, or turn off Follow Alibi's location in Settings › Location."))
         }
     }
     // ponytail: identifiers compared as-is, so an alias pair (Europe/Kiev vs Europe/Kyiv) reads as a mismatch.
