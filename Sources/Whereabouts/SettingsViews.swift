@@ -180,7 +180,9 @@ struct LocationSettings: View {
             .disabled(automaticZone && !m.settings.matchTimeZone)
             Toggle(isOn: m.binding(\.followAlibi)) {
                 Text("Follow Alibi's location")
-                Text("With Alibi on a place for all sites (Tokyo, say), the Mac uses that place's time zone and region instead, so calendar, logs and scheduled jobs move there too. Off and Match my IP address in Alibi leave it to the connection. If Alibi is already on a place, it notices the next time you open its popup.")
+                // Off by default and best left off: it puts the Mac somewhere the IP isn't.
+                Text("\(Image(systemName: "exclamationmark.triangle.fill")) Not recommended.").foregroundStyle(.orange)
+                    + Text(" Uses the time zone and region of Alibi's place for all sites instead of your connection's, so your Mac no longer matches your IP address.")
             }
             .disabled(!m.settings.matchTimeZone)
             if automaticZone {
