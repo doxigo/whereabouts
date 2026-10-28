@@ -46,6 +46,8 @@ final class Monitor {
     @ObservationIgnored var leakInFlight = false
     @ObservationIgnored var killInFlight = false
     @ObservationIgnored var timeZoneInFlight = false
+    /// When each app on the home-time list was last quit to reopen it, by bundle ID.
+    @ObservationIgnored var homeTimeReopens: [String: Date] = [:]
     @ObservationIgnored var killActivation = 0
     @ObservationIgnored var triggerStates: [String: TriggerState] = [:]
     @ObservationIgnored var siteAlertKey: String?
@@ -68,6 +70,7 @@ final class Monitor {
     @ObservationIgnored var reblockTask: Task<Void, Never>?
     @ObservationIgnored private var netDebounce: Task<Void, Never>?
     @ObservationIgnored private var wishWatch: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var launchWatch: NSKeyValueObservation?
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
     @ObservationIgnored private var pathSatisfied = true
     @ObservationIgnored private var pathSeen = false
@@ -103,6 +106,12 @@ final class Monitor {
         NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshSystemTimeZone() }
         }
+        // Not didLaunchApplicationNotification: it skips menu-bar apps (LSUIElement), and this list doesn't.
+        launchWatch = NSWorkspace.shared.observe(\.runningApplications, options: [.new]) { [weak self] _, change in
+            guard change.kind == .insertion, let apps = change.newValue else { return }
+            Task { @MainActor in for app in apps { await self?.keepOnHomeTime(app, justLaunched: true) } }
+        }
+        keepAppsOnHomeTime()
         // A new frontmost app gets its tab read now, not at the next poll.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -151,6 +160,9 @@ final class Monitor {
         if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion
             || old.followAlibi != next.followAlibi) {
             Task { await syncTimeZone() }
+        }
+        if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeTimeApps != next.homeTimeApps) {
+            keepAppsOnHomeTime()
         }
         if old.checkUpdates != next.checkUpdates || old.installUpdates != next.installUpdates { Task { await checkForUpdate() } }
         // Turned on: a fresh check writes the file, rather than an answer that may predate a network change.

@@ -101,6 +101,8 @@ struct AppSettings: Codable, Equatable {
     var homeRegion: String?
     /// With matching on, a place Alibi has you in for all sites moves the Mac there instead of the connection's.
     var followAlibi = false
+    /// Bundle IDs of apps kept on the home time zone (opened with TZ set to it) while matching is on.
+    var homeTimeApps: [String] = []
     /// Consistency warnings: the Mac telling a different story than the connection.
     var warnTimeZone = true
     var warnAutomaticZone = true
@@ -120,6 +122,8 @@ struct AppSettings: Codable, Equatable {
         domains = domains.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         intervalMs = max(10_000, intervalMs)
         if let zone = homeTimeZone, TimeZone(identifier: zone) == nil { homeTimeZone = nil }
+        var seenApp = Set<String>()
+        homeTimeApps = homeTimeApps.filter { !$0.isEmpty && seenApp.insert($0).inserted }
 
         // Provider names match as loose fragments, so dedupe case-insensitively.
         var seenIsp = Set<String>()
@@ -172,6 +176,7 @@ extension AppSettings {
         homeTimeZone = c.get(.homeTimeZone, homeTimeZone)
         homeRegion = c.get(.homeRegion, homeRegion)
         followAlibi = c.get(.followAlibi, followAlibi)
+        homeTimeApps = c.get(.homeTimeApps, homeTimeApps)
         warnTimeZone = c.get(.warnTimeZone, warnTimeZone)
         warnAutomaticZone = c.get(.warnAutomaticZone, warnAutomaticZone)
         warnRegion = c.get(.warnRegion, warnRegion)

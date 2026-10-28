@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - General
 
@@ -161,6 +162,7 @@ struct LocationSettings: View {
             }
 
             timeZone
+            homeTimeApps
             warningsSection
         }
         .formStyle(.grouped)
@@ -219,6 +221,39 @@ struct LocationSettings: View {
         } footer: {
             Footer("While the Mac is on another zone, Calendar shows events in it unless you turn on Time Zone Override in Calendar settings. Reminders, alarms and scheduled jobs follow the new local time, Finder, Messages and logs show it too, and open browser tabs may need a reload. The region also sets date, number and currency formats; your language stays.")
         }
+    }
+
+    private var homeTimeApps: some View {
+        // The button heads the list: after a ForEach, the Form moves it out beside the footer.
+        Section {
+            LabeledContent {
+                Button("Add App…", action: addHomeTimeApps)
+            } label: {
+                Text("Apps on home time")
+                Text("These apps keep your home time zone wherever the Mac is, so a chat or calendar shows your own hours.")
+            }
+            ForEach(m.settings.homeTimeApps, id: \.self) { id in
+                let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+                RemovableRow(onRemove: { m.update { $0.homeTimeApps.removeAll { $0 == id } } }) {
+                    if let url { Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 16, height: 16) }
+                    Text(url?.deletingPathExtension().lastPathComponent ?? id)
+                }
+            }
+        } footer: {
+            Footer("An app on the list that opens on another zone is quit and opened again on home time, which takes a moment. Works while Match my Mac's time zone and region is on.")
+        }
+        .disabled(!m.settings.matchTimeZone)
+    }
+
+    private func addHomeTimeApps() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = "Add"
+        guard panel.runModal() == .OK else { return }
+        let ids = panel.urls.compactMap { Bundle(url: $0)?.bundleIdentifier }.filter { $0 != Bundle.main.bundleIdentifier }
+        m.update { $0.homeTimeApps += ids }
     }
 
     private var warningsSection: some View {

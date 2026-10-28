@@ -215,6 +215,18 @@ func selfTest() {
     unshared.shareStatus = false
     check((try? JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(unshared)))?.shareStatus == false, "status file off survives a save")
 
+    // Apps on home time
+    check(processEnvironment(getpid())?["HOME"] == ProcessInfo.processInfo.environment["HOME"], "reads a process's environment")
+    check(!offHomeTime(["TZ": "GMT+0330"], home: "GMT+0330", justLaunched: true), "app opened on home time is left alone")
+    check(offHomeTime(["HOME": "/"], home: "GMT+0330", justLaunched: false), "app opened without TZ is reopened")
+    check(offHomeTime(["TZ": "Etc/GMT-1"], home: "GMT+0330", justLaunched: false), "app on an old home zone is reopened")
+    check(!offHomeTime(nil, home: "GMT+0330", justLaunched: false) && offHomeTime(nil, home: "GMT+0330", justLaunched: true),
+          "hidden environment: reopened only as it starts")
+    var apps = AppSettings()
+    apps.homeTimeApps = ["test.app", "", "test.app"]
+    apps.normalize()
+    check(apps.homeTimeApps == ["test.app"], "home-time apps dedupe")
+
     // Menu-bar clock: home time in every mode, whatever zone the Mac is on.
     let homeTZ = TimeZone(identifier: "GMT+0330")!, macTZ = TimeZone(identifier: "GMT+0200")!
     let at = Date(timeIntervalSince1970: 1_792_348_920) // 2026-10-18 18:42 UTC: 22:12 at home (+3:30), 20:42 on the Mac (+2)

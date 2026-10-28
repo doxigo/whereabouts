@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 // Match the Mac's time zone to the connection: while a VPN is up the system zone
 // follows the exit (so nothing on the Mac contradicts the IP), otherwise it goes
@@ -225,4 +225,67 @@ func regionTarget(wish: AlibiWish?, exitCountry: String?, onVpn: Bool, connectio
     if wish?.zone != nil { return wish?.country ?? home }
     guard connectionKnown else { return nil }
     return onVpn ? exitCountry : home
+}
+
+// MARK: - Apps on home time
+
+// An app reads TZ once, as it starts, and keeps that zone whatever the Mac does after. So an app on
+// the list is opened with TZ set to home, as `open --env TZ=<home>` would, and one that started
+// without it (from the Dock, a login item, its own updater) is quit and opened again.
+
+extension Monitor {
+    func keepAppsOnHomeTime() {
+        for app in NSWorkspace.shared.runningApplications { Task { await keepOnHomeTime(app, justLaunched: false) } }
+    }
+
+    func keepOnHomeTime(_ app: NSRunningApplication, justLaunched: Bool) async {
+        guard settings.matchTimeZone, let home = settings.homeTimeZone, app != .current,
+              let id = app.bundleIdentifier, settings.homeTimeApps.contains(id), let url = app.bundleURL else { return }
+        // Within moments of a reopen this is that reopen, which an Apple app won't let us read back.
+        if let at = homeTimeReopens[id], Date().timeIntervalSince(at) < 15 { return }
+        guard offHomeTime(processEnvironment(app.processIdentifier), home: home, justLaunched: justLaunched) else { return }
+        homeTimeReopens[id] = Date()
+        let activate = justLaunched || app.isActive
+        // An app that won't quit, say over unsaved work, is left as it is.
+        guard app.terminate() else { return }
+        let deadline = Date().addingTimeInterval(10)
+        while !app.isTerminated, Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+        guard app.isTerminated else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.environment = ["TZ": home]
+        config.activates = activate
+        homeTimeReopens[id] = Date()
+        do {
+            try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+            log.info("Reopened \(id) on home time, \(home)")
+        } catch {
+            log.error("Couldn't reopen \(id) on home time: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Whether an app on the list has to be reopened on `home`. An environment macOS hides (Apple's own
+/// apps) can't be checked, so such an app is reopened only as it starts.
+func offHomeTime(_ env: [String: String]?, home: String, justLaunched: Bool) -> Bool {
+    env.map { $0["TZ"] != home } ?? justLaunched
+}
+
+/// A process's environment as it started, read the way `ps -E` does. nil when macOS hides it, as it
+/// does for Apple's own apps (only the path and arguments come back), or for another user's process.
+func processEnvironment(_ pid: pid_t) -> [String: String]? {
+    var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+    var size = 0
+    guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return nil }
+    var buffer = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > 4 else { return nil }
+    let argc = buffer.withUnsafeBytes { Int($0.load(as: Int32.self)) }
+    // argc, then the executable path, its padding, the arguments and the environment, NUL-separated.
+    // ponytail: skipping empty strings miscounts an empty argument, which an app opened by macOS doesn't have.
+    var env: [String: String] = [:]
+    for entry in buffer[4..<size].split(separator: 0).dropFirst(1 + argc) {
+        let text = String(decoding: entry, as: UTF8.self)
+        guard let eq = text.firstIndex(of: "="), env[String(text[..<eq])] == nil else { continue }
+        env[String(text[..<eq])] = String(text[text.index(after: eq)...])
+    }
+    return env.isEmpty ? nil : env
 }
