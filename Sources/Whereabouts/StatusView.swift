@@ -154,7 +154,7 @@ struct StatusView: View {
         }
     }
 
-    /// Results only; the domains are managed in Settings › General.
+    /// Results only; the domains are managed in Settings › Sites.
     private var reachability: some View {
         Section("Reachability") {
             ForEach(m.reach) { result in

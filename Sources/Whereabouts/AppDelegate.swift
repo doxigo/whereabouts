@@ -301,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             tab("General", "gearshape", GeneralSettings())
             tab("Location", "globe", LocationSettings())
+            tab("Time Zone", "clock", TimeZoneSettings())
             tab("Sites", "safari", SiteSettings())
             tab("Protection", "lock.shield", ProtectionSettings())
             tab("About", "info.circle", AboutSettings())

@@ -7,28 +7,12 @@ struct GeneralSettings: View {
     @Environment(Monitor.self) private var m
     @AppStorage("theme") private var theme = "system"
     @State private var customInterval = false
-    @State private var systemClockShrunk = SystemClock.isShrunk
 
     private static let presets = [(30_000, "Every 30 seconds"), (60_000, "Every minute"), (300_000, "Every 5 minutes"), (900_000, "Every 15 minutes")]
 
     var body: some View {
         Form {
             Section("Monitoring") {
-                Picker("Menu bar shows", selection: m.binding(\.menuBarDisplay)) {
-                    ForEach(MenuBarDisplay.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                Picker(selection: m.binding(\.menuBarClock)) {
-                    ForEach(MenuBarClock.allCases, id: \.self) { Text($0.label).tag($0) }
-                } label: {
-                    Text("Menu bar clock")
-                    Text("Always your home time, even while the Mac is on the VPN's time zone.")
-                }
-                Toggle(isOn: Binding(get: { systemClockShrunk }, set: { on in
-                    Task { await SystemClock.setShrunk(on); systemClockShrunk = SystemClock.isShrunk }
-                })) {
-                    Text("Shrink the system clock")
-                    Text("No app can remove the macOS clock, so this switches it to the small analog face with no date. It changes Control Center › Clock Options and briefly redraws the menu bar. Turn it off to restore your options.")
-                }
                 Picker("Check interval", selection: intervalSelection) {
                     ForEach(Self.presets, id: \.0) { Text($0.1).tag($0.0) }
                     Divider()
@@ -57,20 +41,10 @@ struct GeneralSettings: View {
                 Toggle(isOn: m.binding(\.alerts.edgeLine)) { Text("Screen-edge line"); Text("Show a red line along the top of every screen while your location isn't allowed.") }
             }
 
-            Section {
-                AddField(placeholder: "e.g. github.com") { host in
-                    m.update { s in if !s.domains.contains(where: { $0.caseInsensitiveCompare(host) == .orderedSame }) { s.domains.append(host) } }
-                }
-                ForEach(m.settings.domains, id: \.self) { host in
-                    RemovableRow(onRemove: { m.update { $0.domains.removeAll { $0 == host } } }) { Text(host) }
-                }
-            } header: {
-                Text("Reachability")
-            } footer: {
-                Footer("Check whether these hosts are reachable or blocked. Results show in the status window.")
-            }
-
             Section("Appearance") {
+                Picker("Menu bar shows", selection: m.binding(\.menuBarDisplay)) {
+                    ForEach(MenuBarDisplay.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
                 Picker("Theme", selection: $theme) {
                     Text("Auto").tag("system")
                     Text("Light").tag("light")
@@ -81,10 +55,6 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
-        // Clock Options may have changed in System Settings meanwhile.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            systemClockShrunk = SystemClock.isShrunk
-        }
     }
 
     private var intervalSelection: Binding<Int> {
@@ -105,7 +75,6 @@ struct GeneralSettings: View {
 
 struct LocationSettings: View {
     @Environment(Monitor.self) private var m
-    @State private var automaticZone = TimeZoneHelper.automaticIsOn
 
     var body: some View {
         let allowlist = m.settings.ruleMode == .allowlist
@@ -160,15 +129,30 @@ struct LocationSettings: View {
             } footer: {
                 Footer("The country can be right while the connection isn't — a dropped VPN often reconnects through a local ISP in the same country. Names match loosely, so “Mullvad” covers “Mullvad VPN AB”.")
             }
+        }
+        .formStyle(.grouped)
+    }
+}
 
+// MARK: - Time Zone
+
+struct TimeZoneSettings: View {
+    @Environment(Monitor.self) private var m
+    @State private var automaticZone = TimeZoneHelper.automaticIsOn
+    @State private var systemClockShrunk = SystemClock.isShrunk
+
+    var body: some View {
+        Form {
             timeZone
             homeTimeApps
+            clock
             warningsSection
         }
         .formStyle(.grouped)
-        // Re-read after a trip to System Settings to turn automatic time zone off.
+        // Automatic time zone or Clock Options may have changed in System Settings meanwhile.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             automaticZone = TimeZoneHelper.automaticIsOn
+            systemClockShrunk = SystemClock.isShrunk
         }
     }
 
@@ -256,6 +240,23 @@ struct LocationSettings: View {
         m.update { $0.homeTimeApps += ids }
     }
 
+    private var clock: some View {
+        Section("Clock") {
+            Picker(selection: m.binding(\.menuBarClock)) {
+                ForEach(MenuBarClock.allCases, id: \.self) { Text($0.label).tag($0) }
+            } label: {
+                Text("Menu bar clock")
+                Text("Always your home time, even while the Mac is on the VPN's time zone.")
+            }
+            Toggle(isOn: Binding(get: { systemClockShrunk }, set: { on in
+                Task { await SystemClock.setShrunk(on); systemClockShrunk = SystemClock.isShrunk }
+            })) {
+                Text("Shrink the system clock")
+                Text("No app can remove the macOS clock, so this switches it to the small analog face with no date. It changes Control Center › Clock Options and briefly redraws the menu bar. Turn it off to restore your options.")
+            }
+        }
+    }
+
     private var warningsSection: some View {
         Section {
             Toggle(isOn: m.binding(\.warnTimeZone)) {
@@ -333,6 +334,19 @@ struct SiteSettings: View {
                 if !m.settings.killSwitch && !m.settings.siteRules.isEmpty {
                     Footer("Cut network needs the kill switch, which is off. Turn it on in Protection.")
                 }
+            }
+
+            Section {
+                AddField(placeholder: "e.g. github.com") { host in
+                    m.update { s in if !s.domains.contains(where: { $0.caseInsensitiveCompare(host) == .orderedSame }) { s.domains.append(host) } }
+                }
+                ForEach(m.settings.domains, id: \.self) { host in
+                    RemovableRow(onRemove: { m.update { $0.domains.removeAll { $0 == host } } }) { Text(host) }
+                }
+            } header: {
+                Text("Reachability")
+            } footer: {
+                Footer("Check whether these hosts are reachable or blocked. Results show in the status window.")
             }
         }
         .formStyle(.grouped)
@@ -449,31 +463,6 @@ struct ProtectionSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: m.binding(\.ipv6Check)) { Text("IPv6 exit"); Text("Compare where IPv6 traffic exits with your IPv4 location.") }
-                Toggle(isOn: m.binding(\.dnsCheck)) { Text("DNS resolvers"); Text("Check whether DNS queries are resolved outside your tunnel.") }
-            } header: {
-                Text("Leak checks")
-            } footer: {
-                Footer("The two paths that bypass a VPN even when your IPv4 exit looks right.")
-            }
-
-            Section {
-                Toggle(isOn: m.binding(\.shareStatus)) {
-                    Text("Share location with Git IP Guard")
-                    Text(!StatusFile.gitIpGuardInstalled ? "Git IP Guard isn't installed. It's a free command-line tool that stops git from reaching your remotes while your IP is in a sanctioned country."
-                         : m.settings.shareStatus ? "Git IP Guard is installed and checks git against this location, with no IP lookup of its own."
-                         : "Git IP Guard is installed and looks up your IP itself before git connects.")
-                }
-                if !StatusFile.gitIpGuardInstalled {
-                    Link("Get Git IP Guard", destination: StatusFile.gitIpGuardURL)
-                }
-            } header: {
-                Text("Git IP Guard")
-            } footer: {
-                Footer("Each check is saved to status.json in Whereabouts' folder, where other tools on this Mac can read it. Nothing leaves your Mac.")
-            }
-
-            Section {
                 Toggle(isOn: Binding(get: { m.settings.killSwitch }, set: { v in Task { await m.setKillSwitch(v) } })) {
                     Text("Enable kill switch")
                     Text("Asks for your admin password once to set up, then triggers automatically with no prompts.")
@@ -538,6 +527,31 @@ struct ProtectionSettings: View {
                         }
                     }
                 }
+            }
+
+            Section {
+                Toggle(isOn: m.binding(\.ipv6Check)) { Text("IPv6 exit"); Text("Compare where IPv6 traffic exits with your IPv4 location.") }
+                Toggle(isOn: m.binding(\.dnsCheck)) { Text("DNS resolvers"); Text("Check whether DNS queries are resolved outside your tunnel.") }
+            } header: {
+                Text("Leak checks")
+            } footer: {
+                Footer("The two paths that bypass a VPN even when your IPv4 exit looks right.")
+            }
+
+            Section {
+                Toggle(isOn: m.binding(\.shareStatus)) {
+                    Text("Share location with Git IP Guard")
+                    Text(!StatusFile.gitIpGuardInstalled ? "Git IP Guard isn't installed. It's a free command-line tool that stops git from reaching your remotes while your IP is in a sanctioned country."
+                         : m.settings.shareStatus ? "Git IP Guard is installed and checks git against this location, with no IP lookup of its own."
+                         : "Git IP Guard is installed and looks up your IP itself before git connects.")
+                }
+                if !StatusFile.gitIpGuardInstalled {
+                    Link("Get Git IP Guard", destination: StatusFile.gitIpGuardURL)
+                }
+            } header: {
+                Text("Git IP Guard")
+            } footer: {
+                Footer("Each check is saved to status.json in Whereabouts' folder, where other tools on this Mac can read it. Nothing leaves your Mac.")
             }
         }
         .formStyle(.grouped)

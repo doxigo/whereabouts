@@ -37,14 +37,14 @@ func consistencyWarnings(location: Location?, onVpn: Bool, mac: MacFacts, settin
         if elsewhere {
             let named = place.country.map { " in \(Countries.name($0) ?? $0)" } ?? ""
             warnings.append(ConsistencyWarning(kind: .timeZone, title: "Alibi's location differs from your connection",
-                                               detail: "Your Mac is on \(zoneName(mac.timeZone)) for Alibi's location\(named), your connection is in \(loc.place).\nChoose Match my IP address in Alibi, a place in your connection's country, or turn off Follow Alibi's location in Settings › Location."))
+                                               detail: "Your Mac is on \(zoneName(mac.timeZone)) for Alibi's location\(named), your connection is in \(loc.place).\nChoose Match my IP address in Alibi, a place in your connection's country, or turn off Follow Alibi's location in Settings › Time Zone."))
         }
     }
     // ponytail: identifiers compared as-is, so an alias pair (Europe/Kiev vs Europe/Kyiv) reads as a mismatch.
     if s.warnTimeZone, onVpn, !matchHandles, let loc = location, let exit = loc.timeZone, exit != mac.timeZone {
-        let fix = mac.automaticZone ? "Turn off automatic time zone, then use Match time zone in Settings › Location."
-            : s.matchTimeZone ? "Match time zone couldn't change it. See Settings › Location."
-            : "Turn on Match time zone in Settings › Location."
+        let fix = mac.automaticZone ? "Turn off automatic time zone, then use Match time zone in Settings › Time Zone."
+            : s.matchTimeZone ? "Match time zone couldn't change it. See Settings › Time Zone."
+            : "Turn on Match time zone in Settings › Time Zone."
         warnings.append(ConsistencyWarning(kind: .timeZone, title: "Time zone doesn't match your connection",
                                            detail: "Your Mac is on \(zoneName(mac.timeZone)), your connection is in \(zoneName(exit)).\n\(fix)"))
     }
@@ -56,7 +56,7 @@ func consistencyWarnings(location: Location?, onVpn: Bool, mac: MacFacts, settin
     // Matching sets the region in the same check, and needs nothing that can get stuck.
     if s.warnRegion, onVpn, !s.matchTimeZone, let code = location?.countryCode, let region = mac.region, region.uppercased() != code.uppercased() {
         warnings.append(ConsistencyWarning(kind: .region, title: "Mac region differs from your connection",
-                                           detail: "Region is \(Countries.name(region) ?? region), your connection is in \(location?.place ?? code). Alibi covers your browser's language; apps can still read the region.\nTurn on Match time zone and region in Settings › Location."))
+                                           detail: "Region is \(Countries.name(region) ?? region), your connection is in \(location?.place ?? code). Alibi covers your browser's language; apps can still read the region.\nTurn on Match time zone and region in Settings › Time Zone."))
     }
     return warnings
 }
@@ -74,7 +74,7 @@ func newWarnings(_ current: [ConsistencyWarning], announced: inout Set<Consisten
 extension ConsistencyKind {
     var symbol: String { self == .region ? "info.circle" : "exclamationmark.triangle" }
     /// Where the fix lives: a Whereabouts Settings tab or a System Settings pane.
-    var settingsTab: String? { self == .automaticZone ? nil : "Location" }
+    var settingsTab: String? { self == .automaticZone ? nil : "Time Zone" }
     var systemPane: URL? {
         self == .automaticZone ? URL(string: "x-apple.systempreferences:com.apple.Date-Time-Settings.extension") : nil
     }
