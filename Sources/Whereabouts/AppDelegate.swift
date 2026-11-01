@@ -164,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             title: m.kill.active ? "Internet blocked" : m.geo.kind == .offline ? "No connection" : m.geo.location?.cityPlace ?? "Location unknown",
             detail: m.kill.active ? (m.kill.held ? "Held since sleep" : "Kill switch engaged") : m.geoBadge.label + checked,
             warning: m.leaking ? m.leakHeadline : nil,
-            status: m.kill.active ? [] : shortStatus())))
+            status: m.kill.active ? [] : shortStatus())) { [weak self] in self?.showStatus() })
 
         let warnings = m.consistency
         if !warnings.isEmpty {
@@ -189,7 +189,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             menu.addItem(action("Re-arm Kill Switch", "shield") { m.rearmKillSwitch() })
         }
         menu.addItem(.separator())
-        menu.addItem(action("Show Status", "macwindow") { [weak self] in self?.showStatus() })
         menu.addItem(action("Check Now", "arrow.clockwise") { Task { await m.checkAll() } })
         if let until = m.pausedUntil {
             menu.addItem(disabled: "Paused until \(until.formatted(date: .omitted, time: .shortened))")
@@ -216,11 +215,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(action("Quit Whereabouts", "power", key: "q") { NSApp.terminate(nil) })
     }
 
-    private func headerItem(_ header: MenuHeader) -> NSMenuItem {
-        let view = NSHostingView(rootView: header)
+    /// The header opens the status window. Its title is what VoiceOver reads, and Return runs it too.
+    private func headerItem(_ header: MenuHeader, _ run: @escaping () -> Void) -> NSMenuItem {
+        let view = MenuRowView(rootView: header)
+        view.onClick = run
         view.frame.size = view.fittingSize
         view.autoresizingMask = .width  // stretch to the menu's widest item
-        let item = NSMenuItem()
+        let item = action("Show Status", "macwindow", run)
         item.view = view
         return item
     }
@@ -368,6 +369,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 }
 
+/// A SwiftUI menu row that clicks like an item: a view-based item gets no action from a click,
+/// so its view closes the menu and runs it, as AppKit does for any other item.
+private final class MenuRowView<Content: View>: NSHostingView<Content> {
+    var onClick: () -> Void = {}
+
+    override func mouseUp(with event: NSEvent) {
+        enclosingMenuItem?.menu?.cancelTracking()
+        onClick()
+    }
+}
+
 /// The menu's first row: the verdict at full contrast, where a disabled item would grey it out.
 private struct MenuHeader: View {
     let glyph: NSImage
@@ -375,6 +387,7 @@ private struct MenuHeader: View {
     let detail: String
     let warning: String?
     let status: [(label: String, value: String)]
+    @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -399,6 +412,9 @@ private struct MenuHeader: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A click opens the status window, so the pointer gets a highlight, as on the other items.
+        .background { RoundedRectangle(cornerRadius: 6).fill(.quaternary).padding(.horizontal, 5).opacity(hovering ? 1 : 0) }
+        .onHover { hovering = $0 }
     }
 }
 
