@@ -140,15 +140,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return clockText(monitor.settings.menuBarClock, home: homeClockZone(monitor.settings, mac: mac), mac: mac, at: Date())
     }
 
-    /// The status window's essentials, one line each: exit, VPN, leak checks, Mac time zone.
-    private func shortStatus() -> [String] {
+    /// The status window's essentials, a labeled row each: exit, VPN, leak checks, Mac time zone.
+    private func shortStatus() -> [(label: String, value: String)] {
         let m = monitor, loc = m.geo.location
-        let exit = [loc?.ip, loc?.isp].compactMap { $0 }.joined(separator: " · ")
-        let vpn = m.geo.vpnName.map { "VPN: \($0)" } ?? loc?.isVpn.map { $0 ? "VPN detected" : "No VPN detected" }
-        let checks = [m.leak.dns.state == .off ? nil : "DNS: \(m.leak.dns.state.label)",
-                      m.leak.ipv6.state == .off ? nil : "IPv6: \(m.leak.ipv6.state.label)"]
-            .compactMap { $0 }.joined(separator: " · ")
-        return [exit, vpn ?? "", checks, "Mac time zone: \(zoneName(m.systemTimeZone))"].filter { !$0.isEmpty }
+        let rows: [(String, String?)] = [
+            ("IP", loc?.ip),
+            ("Provider", loc?.isp),
+            ("VPN", m.geo.vpnName ?? loc?.isVpn.map { $0 ? "Detected" : "Not detected" }),
+            ("DNS", m.leak.dns.state == .off ? nil : m.leak.dns.state.label),
+            ("IPv6", m.leak.ipv6.state == .off ? nil : m.leak.ipv6.state.label),
+            ("Time zone", zoneName(m.systemTimeZone)),
+        ]
+        return rows.compactMap { row in row.1.map { (row.0, $0) } }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -371,7 +374,7 @@ private struct MenuHeader: View {
     let title: String
     let detail: String
     let warning: String?
-    let status: [String]
+    let status: [(label: String, value: String)]
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -380,11 +383,17 @@ private struct MenuHeader: View {
                 Text(title).font(.system(size: 13, weight: .semibold))
                 Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
                 if let warning { Text(warning).font(.system(size: 11)).foregroundStyle(.orange) }
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(status, id: \.self) { Text($0) }
+                // Labels in a column of their own, so each value is found at a glance.
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 2) {
+                    ForEach(status, id: \.label) { row in
+                        GridRow {
+                            Text(row.label).foregroundStyle(.secondary)
+                            Text(row.value)
+                        }
+                    }
                 }
-                .font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary)
-                .padding(.top, status.isEmpty ? 0 : 3)
+                .font(.system(size: 11)).monospacedDigit()
+                .padding(.top, status.isEmpty ? 0 : 5)
             }
         }
         .padding(.horizontal, 14)
