@@ -30,6 +30,8 @@ The screenshots use made-up data from the app's demo mode (`--demo`). `Branding/
 - **Leak checks.** It also checks the quieter ways a location leaks: the IPv6 exit and the DNS resolvers. A leak sends a notification, but it never engages the kill switch.
 - **Alerts.** Choose how a wrong location reaches you: a colored menu-bar item, a notification, a sound, a red line along the top of every screen. Turning the VPN off on purpose? **Pause for 1 Hour** in the menu holds the alerts and the kill switch.
 - **Kill switch.** Cuts internet traffic on a country or ISP violation, or on a per-site rule that asks for it. If you unblock by hand, you get two minutes to reconnect your VPN: if the location still isn't allowed then, it blocks again. It re-arms sooner once every check is clear. With **Confirm before blocking** on, a second lookup provider cross-checks each violation. If the two disagree, the kill switch waits for the next check to agree.
+- **Hold the network during sleep.** Apps reconnect the moment the Mac wakes, often before the VPN does, and that first connection goes out over your own ISP. With this on (Settings › Protection, off by default, needs the kill switch), Whereabouts blocks traffic as the Mac goes to sleep and lifts the block once the first check after waking finds your location allowed. While it holds, only your VPN and Whereabouts' own lookups get through. See [the details](#holding-the-network-during-sleep).
+- **Computer name.** The router and every device on the network you join can see your Mac's name, VPN or not, and macOS names it after you by default (Alice's MacBook Pro). Whereabouts warns while the name includes yours, and Settings › Protection renames the Mac (and its `.local` name) after asking for your admin password once.
 - **Time zone, region and home clock.** Optionally moves the Mac to the VPN exit's time zone and region, so nothing on the Mac contradicts the IP, and back home when the VPN drops. With **Follow Alibi's location** on too (off by default, and not recommended), a place in Alibi for all sites (Tokyo, say) moves the Mac to that place's time zone and region instead, so the Mac no longer matches your IP address; Off and Match my IP address in Alibi leave it to the connection. The menu-bar clock keeps showing your home time either way. No app can remove the macOS clock, so a setting shrinks it to its small analog face instead.
 - **Apps on home time.** Some apps should keep your own hours wherever the Mac is, like a chat app or a calendar. Add them in Settings › Time Zone and Whereabouts opens them with your home time zone in `TZ`, as `open --env TZ=<zone>` would. One that starts on another zone (from the Dock, a login item or its own updater) is quit and opened again on home time. Apple's own apps hide their environment, so one of those that's already running when Whereabouts starts is caught the next time it opens.
 - **History.** Past lookups are kept, so you can see where this Mac has been seen.
@@ -65,6 +67,25 @@ The file is replaced atomically. When the network changes or the Mac wakes, it s
 It loads block rules into the macOS packet filter (`pf`), in the anchor `com.apple/100.Whereabouts`. Network interfaces are never touched, so Wi-Fi keeps its lease and the local network keeps working. Nothing persistent is written, so a reboot always restores traffic.
 
 `pf` needs root. Turning the kill switch on asks for your admin password once. It installs a root-owned helper in `/Library/Application Support/Whereabouts` and a sudoers rule at `/etc/sudoers.d/whereabouts-killswitch` that allows only that helper's own subcommands. Later blocks and unblocks run without a prompt. Turning the kill switch off lifts any active block and removes the helper and the sudoers rule.
+
+### Holding the network during sleep
+
+When the Mac is about to sleep, the helper loads a second set of rules into the same anchor. It works like the kill switch block, with three exceptions:
+
+- Traffic inside a VPN tunnel (`utun0` to `utun31`, `ipsec0` to `ipsec3`, `ppp0` to `ppp3`) passes. What goes into a tunnel still leaves through Wi-Fi or Ethernet, where only the next two pass.
+- The addresses `ip-api.com` and `ipwho.is` resolve to pass, so the app can check where you are. So does DNS (port 53 only) to the Mac's DNS servers, when they're public ones like `1.1.1.1`, so it can look those names up. DNS servers on your local network pass anyway.
+- While a tunnel carries your connection, the public addresses the Mac reaches straight from Wi-Fi or Ethernet pass too. With every app inside the tunnel, those are the VPN's own server, plus anything that skips the VPN anyway. This lets the VPN reconnect.
+
+After waking, the first check that finds your location allowed lifts the block. A check that finds it not allowed turns the hold into a normal kill switch block. **Unblock Network** lifts it by hand as usual.
+
+Some setups can't get through a hold, so you'd unblock by hand after waking:
+
+- A VPN on an unconnected socket shows no server address (WireGuard apps built on wireguard-go do this).
+- A VPN that picks a different server when it reconnects.
+
+A VPN running on your router needs none of this: the Mac has nothing to reconnect, and the check goes out straight away.
+
+The hold needs version 2 of the helper, which adds the `hold` subcommand to the sudoers rule. A helper set up by an older version shows **Setup needed** in Settings › Protection and asks for the admin password once more.
 
 ### Where lookups go
 

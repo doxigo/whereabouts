@@ -1,5 +1,9 @@
 import AppKit
 
+// The app reads and sets the system's time zone, so it must never run on a TZ it inherited:
+// started from a terminal in an app on home time, TimeZone.current would report that instead.
+unsetenv("TZ")
+
 if CommandLine.arguments.contains("--selftest") {
     selfTest()
     exit(0)

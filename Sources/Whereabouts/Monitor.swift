@@ -27,6 +27,8 @@ final class Monitor {
     private(set) var pausedUntil: Date?
     var systemTimeZone = TimeZone.current.identifier
     var timeZoneError: String?
+    var computerName = ComputerName.current()
+    var renameError: String?
     /// Alibi's All sites cover, as its host last heard it.
     var alibiWish = AlibiHost.readWish()
     /// The place the Mac's clock follows: Alibi's, with Match time zone and Follow Alibi's location on.
@@ -100,6 +102,9 @@ final class Monitor {
         siteTask = loop(every: 5) { await $0.checkSite() }
         startNetworkWatch()
         _ = loop(every: 86_400, delay: 30) { await $0.checkForUpdate() }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.holdForSleep() }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.markChecking(); self?.recheckConnectivity() }
         }
@@ -299,6 +304,7 @@ final class Monitor {
     }
 
     private func runChecks() async {
+        refreshComputerName()
         // The leak checks compare against the IPv4 exit, so refresh that first.
         _ = await checkGeo()
         // Leak checks at most once a minute, whatever the interval.
@@ -420,7 +426,8 @@ final class Monitor {
             // Our own block stops every lookup, so this failure says nothing new: keep
             // the last answer (and its check time) instead of calling the block "offline".
             if geo.location == nil {
-                geo = GeoStatus(kind: .unknown, message: "Can't check your location while the network is blocked.")
+                geo = GeoStatus(kind: .unknown, message: kill.held ? "Can't check your location yet after sleep. The network stays blocked until a check finds it allowed."
+                                : "Can't check your location while the network is blocked.")
             }
             return geo
         } else {
@@ -464,6 +471,7 @@ final class Monitor {
         // Only a real "safe" is clear — offline is exactly what an engaged block looks like.
         reportTriggerState("geo", status.kind == .violation ? .violating : status.kind == .safe ? .clear : .unknown)
         fireGeoAlerts(status, becameViolation: becameViolation, recovered: recovered, ispChangedTo: ispChangedTo)
+        if kill.held && status.kind == .safe { await releaseHold() }
         rereadAlibiWish()
         if settings.matchTimeZone { Task { await syncTimeZone() } }
         prevKind = status.kind
@@ -508,7 +516,8 @@ final class Monitor {
             // Two checks in a row agree — as good as a second provider.
             killDeferred = false
             Task { await activateKillSwitch(status.message) }
-        } else if becameViolation {
+        } else if becameViolation || kill.held {
+            // Held for sleep, a violation that was already showing counts too: the hold lets tunnels through.
             if status.confirmed == false {
                 killDeferred = true
                 log.warning("Violation unconfirmed by the cross-check — holding the kill switch")
@@ -521,7 +530,8 @@ final class Monitor {
     // MARK: Reachability
 
     func checkReach() async {
-        guard !reachInFlight else { return }
+        // A block makes every host unreachable, which says nothing about them.
+        guard !reachInFlight, !kill.active else { return }
         reachInFlight = true
         defer { reachInFlight = false }
 

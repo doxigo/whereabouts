@@ -167,19 +167,27 @@ extension Monitor {
         guard TimeZone(identifier: target) != nil else { AlibiHost.publishSystem(nil); return }
         guard !timeZoneInFlight else { return }
         refreshSystemTimeZone()
-        guard target != systemTimeZone else { AlibiHost.publishSystem(target); return }
+        guard target != systemTimeZone else { timeZoneError = nil; AlibiHost.publishSystem(target); return }
 
         timeZoneInFlight = true
         defer { timeZoneInFlight = false }
         do {
             try await TimeZoneHelper.set(target)
             refreshSystemTimeZone()
-            timeZoneError = nil
-            AlibiHost.publishSystem(systemTimeZone == target ? target : nil)
-            notify("Time zone changed", target == home
-                ? "Mac time zone set back to your home zone, \(target)."
-                : target == wish?.zone ? "Mac time zone set to \(target), Alibi's location."
-                : "Mac time zone set to \(target) to match your connection.")
+            if systemTimeZone == target {
+                timeZoneError = nil
+                AlibiHost.publishSystem(target)
+                notify("Time zone changed", target == home
+                    ? "Mac time zone set back to your home zone, \(target)."
+                    : target == wish?.zone ? "Mac time zone set to \(target), Alibi's location."
+                    : "Mac time zone set to \(target) to match your connection.")
+            } else {
+                // The helper checked its own work, so the app is reading something else (an inherited TZ
+                // did once). Announcing the change would repeat at every check: fail, so the warning shows.
+                AlibiHost.publishSystem(nil)
+                timeZoneError = "The time zone was set to \(zoneName(target)), but Whereabouts still reads \(zoneName(systemTimeZone))."
+                log.error("Time zone set to \(target), but it reads \(self.systemTimeZone)")
+            }
         } catch {
             AlibiHost.publishSystem(nil)
             timeZoneError = "Couldn't change the time zone — the helper may be missing. Turn the setting off and on again to reinstall it."

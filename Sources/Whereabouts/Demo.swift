@@ -52,6 +52,8 @@ enum Demo {
     @MainActor static func apply(to m: Monitor) {
         let checked = Date().addingTimeInterval(-40)
         m.systemTimeZone = "Europe/Lisbon"
+        // The real name would show in screenshots, and warn if it has the owner's in it.
+        m.computerName = ComputerName.Names(name: "MacBook Pro", host: "MacBook-Pro")
         if blocked {
             let loc = Location(ip: "198.51.100.7", country: "United States", countryCode: "US", city: "Ashburn",
                                isp: "Example Cloud", isVpn: true, timeZone: "America/New_York")

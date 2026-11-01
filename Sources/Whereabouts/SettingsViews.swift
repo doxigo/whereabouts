@@ -459,6 +459,7 @@ private struct SiteRuleEditor: View {
 struct ProtectionSettings: View {
     @Environment(Monitor.self) private var m
     @State private var copied = false
+    @State private var newName = ""
 
     var body: some View {
         Form {
@@ -471,6 +472,11 @@ struct ProtectionSettings: View {
                     Text("Confirm before blocking")
                     Text("Require a second provider, or the next check, to agree before traffic is cut.")
                 }
+                Toggle(isOn: m.binding(\.holdOnWake)) {
+                    Text("Hold the network during sleep")
+                    Text("Apps reconnect the moment the Mac wakes, often before the VPN does. While it sleeps, only your VPN and Whereabouts' own checks get through, until the first check after waking finds your location allowed.")
+                }
+                .disabled(!m.settings.killSwitch)
                 if m.kill.active {
                     LabeledContent {
                         Button("Unblock Now") { Task { await m.restoreConnection() } }
@@ -492,7 +498,7 @@ struct ProtectionSettings: View {
                         Button("Set Up Now") { Task { if await m.installKillSwitchHelper() { await m.refreshKillSwitchState() } } }
                     } label: {
                         Text("Setup needed")
-                        Text("The privileged helper isn't installed, so the kill switch can't engage yet.")
+                        Text("The privileged helper is missing or out of date, so the kill switch may not engage, or hold the network during sleep.")
                     }
                 }
                 if let error = m.kill.error {
@@ -529,6 +535,8 @@ struct ProtectionSettings: View {
                 }
             }
 
+            computerName
+
             Section {
                 Toggle(isOn: m.binding(\.ipv6Check)) { Text("IPv6 exit"); Text("Compare where IPv6 traffic exits with your IPv4 location.") }
                 Toggle(isOn: m.binding(\.dnsCheck)) { Text("DNS resolvers"); Text("Check whether DNS queries are resolved outside your tunnel.") }
@@ -556,6 +564,39 @@ struct ProtectionSettings: View {
         }
         .formStyle(.grouped)
     }
+
+    private var computerName: some View {
+        let current = m.computerName.name ?? m.computerName.host ?? ""
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        return Section {
+            LabeledContent {
+                Text(current)
+            } label: {
+                Text("This Mac")
+                if let host = m.computerName.host { Text("\(host).local") }
+            }
+            Toggle(isOn: m.binding(\.warnComputerName)) {
+                Text("Warn when it includes your name")
+                Text("Shows in the menu and the status window while it does.")
+            }
+            HStack {
+                TextField("New name", text: $newName, prompt: Text("MacBook Pro"))
+                Button("Rename…") { Task { await m.renameComputer(trimmed) } }
+                    .disabled(trimmed.isEmpty || trimmed == current)
+            }
+            if let error = m.renameError {
+                Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
+            }
+        } header: {
+            Text("Computer name")
+        } footer: {
+            Footer("The router and every device on the network you're on can see this name, VPN or not. Renaming asks for your admin password and changes it in System Settings › General › Sharing too.")
+        }
+        .onAppear {
+            m.refreshComputerName()
+            if newName.isEmpty { newName = ComputerName.suggestion(m.computerName.name, ComputerName.ownerWords) }
+        }
+    }
 }
 
 // MARK: - About
@@ -572,7 +613,7 @@ struct AboutSettings: View {
                     Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 64, height: 64)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Whereabouts").font(.title2.bold())
-                        Text("Version \(appVersion) (\(appBuild))").foregroundStyle(.secondary).textSelection(.enabled)
+                        Text("Version \(appVersion)").foregroundStyle(.secondary).textSelection(.enabled)
                         Text("Keeps checking where the internet thinks your Mac is.").foregroundStyle(.secondary)
                     }
                 }

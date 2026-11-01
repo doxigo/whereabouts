@@ -1,10 +1,11 @@
 import AppKit
+import SystemConfiguration
 
 // Consistency warnings: a site can compare what the Mac reports (time zone,
 // region) with where the connection appears to be, so a mismatch gives a VPN
 // away. These only point it out; nothing here changes the system.
 
-enum ConsistencyKind: String, CaseIterable { case timeZone, automaticZone, region }
+enum ConsistencyKind: String, CaseIterable { case timeZone, automaticZone, region, computerName }
 
 struct ConsistencyWarning: Equatable {
     var kind: ConsistencyKind
@@ -18,6 +19,9 @@ struct MacFacts {
     /// "Set time zone automatically using your current location".
     var automaticZone: Bool
     var region: String?
+    /// The names every network sees, and the words of the account's own name.
+    var computerName = ComputerName.Names()
+    var ownerWords: [String] = []
 }
 
 /// `alibiPlace`: the place Alibi has the Mac's clock on, while Match time zone follows it.
@@ -58,6 +62,12 @@ func consistencyWarnings(location: Location?, onVpn: Bool, mac: MacFacts, settin
         warnings.append(ConsistencyWarning(kind: .region, title: "Mac region differs from your connection",
                                            detail: "Region is \(Countries.name(region) ?? region), your connection is in \(location?.place ?? code). Alibi covers your browser's language; apps can still read the region.\nTurn on Match time zone and region in Settings › Time Zone."))
     }
+    // Not about the connection: the router and the devices on any network see it, VPN or not.
+    let names = [mac.computerName.name, mac.computerName.host].compactMap { $0 }
+    if s.warnComputerName, names.contains(where: { ComputerName.mentions($0, mac.ownerWords) }) {
+        warnings.append(ConsistencyWarning(kind: .computerName, title: "Computer name includes your name",
+                                           detail: "Networks you join, and the devices on them, see this Mac as “\(names[0])”.\nRename it in Settings › Protection."))
+    }
     return warnings
 }
 
@@ -74,7 +84,13 @@ func newWarnings(_ current: [ConsistencyWarning], announced: inout Set<Consisten
 extension ConsistencyKind {
     var symbol: String { self == .region ? "info.circle" : "exclamationmark.triangle" }
     /// Where the fix lives: a Whereabouts Settings tab or a System Settings pane.
-    var settingsTab: String? { self == .automaticZone ? nil : "Time Zone" }
+    var settingsTab: String? {
+        switch self {
+        case .automaticZone: nil
+        case .computerName: "Protection"
+        default: "Time Zone"
+        }
+    }
     var systemPane: URL? {
         self == .automaticZone ? URL(string: "x-apple.systempreferences:com.apple.Date-Time-Settings.extension") : nil
     }
@@ -84,16 +100,89 @@ extension Monitor {
     var consistency: [ConsistencyWarning] {
         let loc = geo.location
         let mac = MacFacts(timeZone: systemTimeZone, automaticZone: TimeZoneHelper.automaticIsOn,
-                           region: Locale.autoupdatingCurrent.region?.identifier)
+                           region: Locale.autoupdatingCurrent.region?.identifier,
+                           computerName: computerName, ownerWords: ComputerName.ownerWords)
         return consistencyWarnings(location: loc, onVpn: geo.vpnName != nil || loc?.isVpn == true, mac: mac,
                                    settings: settings, matchFailing: timeZoneError != nil, alibiPlace: alibiPlace)
     }
 
     /// Notifies once when a warning appears; the menu lists it for as long as it lasts.
     func announceWarnings() {
-        for w in newWarnings(consistency, announced: &warningAlertKinds, connectionKnown: geo.location != nil) {
+        // The computer name doesn't come and go, so a notification would only repeat at every launch.
+        for w in newWarnings(consistency, announced: &warningAlertKinds, connectionKnown: geo.location != nil) where w.kind != .computerName {
             log.info("Consistency warning: \(w.title)")
             notify(w.title, w.detail)
         }
+    }
+}
+
+// MARK: - Computer name
+
+/// The Mac's name: "Alice's MacBook Pro" in AirDrop and file sharing, and its Bonjour form
+/// (Alices-MacBook-Pro.local) on the local network and in the DHCP request to the router.
+enum ComputerName {
+    struct Names: Equatable {
+        var name: String?
+        var host: String?
+    }
+
+    static func current() -> Names {
+        Names(name: SCDynamicStoreCopyComputerName(nil, nil) as String?, host: SCDynamicStoreCopyLocalHostName(nil) as String?)
+    }
+
+    /// The words of the account's full and short name that a computer name would give away.
+    static var ownerWords: [String] { words(NSFullUserName()) + words(NSUserName()) }
+
+    private static func words(_ text: String) -> [String] {
+        text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { $0.count >= 3 }
+    }
+
+    /// Whether `name` has one of `owner`'s words in it, possessive or not: "Alice's MacBook", "Alices-MacBook".
+    // ponytail: whole words only, so a name inside another word ("Mac" in "MacBook") never counts.
+    static func mentions(_ name: String, _ owner: [String]) -> Bool {
+        words(name).contains { word in owner.contains { word == $0 || word == $0 + "s" } }
+    }
+
+    /// `name` without the owner's words: "Alice's MacBook Pro" → "MacBook Pro".
+    static func suggestion(_ name: String?, _ owner: [String]) -> String {
+        let kept = (name ?? "").split(whereSeparator: { $0 == " " || $0 == "-" }).filter { !mentions(String($0), owner) }
+        return kept.isEmpty ? "Mac" : kept.joined(separator: " ")
+    }
+
+    /// The Bonjour name macOS would make of `name`: letters, digits and single hyphens.
+    static func hostName(_ name: String) -> String {
+        let parts = name.split(whereSeparator: { !($0.isASCII && ($0.isLetter || $0.isNumber)) })
+        return parts.isEmpty ? "Mac" : String(parts.joined(separator: "-").prefix(63))
+    }
+
+    static func renameScript(_ name: String) -> String {
+        """
+        #!/bin/bash
+        /usr/sbin/scutil --set ComputerName \(Privileged.q(name)) && /usr/sbin/scutil --set LocalHostName \(Privileged.q(hostName(name)))
+        """
+    }
+}
+
+extension Monitor {
+    func refreshComputerName() {
+        guard !Demo.enabled else { return }
+        let names = ComputerName.current()
+        if names != computerName { computerName = names }
+    }
+
+    /// Asks for the admin password once; both names change, as they do in System Settings › Sharing.
+    func renameComputer(_ name: String) async {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, !Demo.enabled else { return }
+        do {
+            try await Privileged.run(ComputerName.renameScript(name), prompt: "Whereabouts needs your admin password to rename this Mac.")
+            renameError = nil
+        } catch {
+            if !Privileged.isUserCanceled(error) {
+                log.error("Rename failed: \(error.localizedDescription)")
+                renameError = "Couldn't rename this Mac. Try System Settings › General › Sharing."
+            }
+        }
+        refreshComputerName()
     }
 }

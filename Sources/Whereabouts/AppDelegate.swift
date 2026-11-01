@@ -159,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(headerItem(MenuHeader(
             glyph: StampGlyph.image(mark, color: color),
             title: m.kill.active ? "Internet blocked" : m.geo.kind == .offline ? "No connection" : m.geo.location?.cityPlace ?? "Location unknown",
-            detail: m.kill.active ? "Kill switch engaged" : m.geoBadge.label + checked,
+            detail: m.kill.active ? (m.kill.held ? "Held since sleep" : "Kill switch engaged") : m.geoBadge.label + checked,
             warning: m.leaking ? m.leakHeadline : nil,
             status: m.kill.active ? [] : shortStatus())))
 
@@ -329,10 +329,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func present(_ window: NSWindow) {
-        NSApp.activate()
+        // From the menu-bar menu, activate() is only a request and macOS refuses it while another
+        // app is in front: the window opened behind that app, or in front but unfocused, taking a
+        // click before it answered. Ignoring other apps activates regardless.
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        // From the menu-bar menu, activate() is only a request and macOS refuses it while
-        // another app is in front, which left the window opening behind that app.
         window.orderFrontRegardless()
     }
 

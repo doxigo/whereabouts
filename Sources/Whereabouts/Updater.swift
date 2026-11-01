@@ -1,7 +1,6 @@
 import Foundation
 
 let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
 let repoURL = URL(string: "https://github.com/doxigo/whereabouts")!
 
 /// A GitHub release newer than this build.

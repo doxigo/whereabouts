@@ -9,7 +9,8 @@ import Foundation
 // evaluates `anchor "com.apple/*"`, and `100.` sorts ahead of Apple's own
 // anchors so our `quick` rules win. pf needs root, so a one-time admin prompt
 // installs a root-owned helper plus a passwordless-sudo rule scoped to its three
-// argument-less subcommands; every trigger after that is a silent `sudo -n`.
+// argument-less subcommands, plus `hold`, which checks its own arguments; every
+// trigger after that is a silent `sudo -n`.
 
 /// What a monitor currently sees, for deciding when a paused kill switch may
 /// re-arm. `unknown` (offline, mid-reconnect) must never count as a recovery.
@@ -24,7 +25,7 @@ func reblockReason(_ geo: GeoStatus, _ site: SiteWatchStatus) -> String? {
 }
 
 enum KillSwitch {
-    static let helperVersion = 1
+    static let helperVersion = 2
     static let helperPath = "\(Privileged.appDir)/killswitch-helper.sh"
     static let tokenFile = "\(Privileged.appDir)/killswitch-pf.token"
     static let sudoersPath = "/etc/sudoers.d/whereabouts-killswitch"
@@ -60,39 +61,67 @@ enum KillSwitch {
     pass quick inet proto udp from any port 67 to any port 68
     pass quick inet6 proto udp from any port 546 to any port 547
     pass quick inet6 proto udp from any port 547 to any port 546
-    # Everything else - the internet, including any VPN tunnel - is dropped.
-    block drop quick all
     WA_RULES
+      # A hold for sleep also lets through VPN tunnels and the addresses it was given.
+      [ -n "${HOLD_RULES:-}" ] && printf '%s\n' "$HOLD_RULES"
+      # Everything else - the internet, including any VPN tunnel outside a hold - is dropped.
+      echo 'block drop quick all'
+    }
+
+    load_rules() {
+      # Without the anchor point our rules would load but never be evaluated.
+      if ! $PFCTL -s rules 2>/dev/null | grep -qF 'anchor "com.apple/*"'; then
+        echo "whereabouts: /etc/pf.conf has no com.apple anchor point" >&2
+        exit 5
+      fi
+      if ! emit_rules | $PFCTL -a "$ANCHOR" -f - 2>/dev/null; then
+        echo "whereabouts: failed to load pf block rules" >&2
+        exit 3
+      fi
+      # pf enable is reference counted; hold exactly one token so other pf
+      # users (Internet Sharing, the app firewall) are never disturbed.
+      if [ ! -s "$TOKEN_FILE" ]; then
+        TOKEN=$($PFCTL -E 2>&1 | awk '/Token/ { print $NF }' | tail -n 1)
+        if [ -n "$TOKEN" ]; then
+          echo "$TOKEN" > "$TOKEN_FILE"
+          chmod 600 "$TOKEN_FILE"
+        fi
+      fi
+      if ! $PFCTL -s info 2>/dev/null | grep -qF "Status: Enabled"; then
+        $PFCTL -a "$ANCHOR" -F all >/dev/null 2>&1
+        echo "whereabouts: pf could not be enabled" >&2
+        exit 4
+      fi
+      # Drop existing state, or traffic already in flight rides past the block.
+      $PFCTL -F states >/dev/null 2>&1
+      echo active
     }
 
     case "${1:-}" in
       engage)
-        # Without the anchor point our rules would load but never be evaluated.
-        if ! $PFCTL -s rules 2>/dev/null | grep -qF 'anchor "com.apple/*"'; then
-          echo "whereabouts: /etc/pf.conf has no com.apple anchor point" >&2
-          exit 5
-        fi
-        if ! emit_rules | $PFCTL -a "$ANCHOR" -f - 2>/dev/null; then
-          echo "whereabouts: failed to load pf block rules" >&2
-          exit 3
-        fi
-        # pf enable is reference counted; hold exactly one token so other pf
-        # users (Internet Sharing, the app firewall) are never disturbed.
-        if [ ! -s "$TOKEN_FILE" ]; then
-          TOKEN=$($PFCTL -E 2>&1 | awk '/Token/ { print $NF }' | tail -n 1)
-          if [ -n "$TOKEN" ]; then
-            echo "$TOKEN" > "$TOKEN_FILE"
-            chmod 600 "$TOKEN_FILE"
+        load_rules
+        ;;
+      hold)
+        # The Mac is going to sleep: block, but let a VPN reconnect and the app check where
+        # it is. Tunnels pass whole (what goes in still leaves through the physical interface,
+        # where only the given addresses pass). "flags any" keeps a flow alive after the flush.
+        # "dns:<address>" passes only DNS to it, so the app's lookups can resolve.
+        shift
+        [ $# -le 64 ] || { echo "whereabouts: too many addresses" >&2; exit 2; }
+        HOLD_RULES="pass quick on { $(echo utun{0..31} ipsec{0..3} ppp{0..3}) } all flags any"
+        for arg in "$@"; do
+          addr="${arg#dns:}"
+          if [[ "$addr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then family=inet
+          elif [[ "$addr" =~ ^[0-9A-Fa-f:]{2,39}$ && "$addr" == *:* ]]; then family=inet6
+          else echo "whereabouts: invalid address" >&2; exit 2
           fi
-        fi
-        if ! $PFCTL -s info 2>/dev/null | grep -qF "Status: Enabled"; then
-          $PFCTL -a "$ANCHOR" -F all >/dev/null 2>&1
-          echo "whereabouts: pf could not be enabled" >&2
-          exit 4
-        fi
-        # Drop existing state, or traffic already in flight rides past the block.
-        $PFCTL -F states >/dev/null 2>&1
-        echo active
+          if [ "$addr" != "$arg" ]; then
+            HOLD_RULES+=$'\n'"pass quick $family proto udp from any to $addr port 53"$'\n'"pass quick $family proto tcp from any to $addr port 53 flags any"
+          else
+            HOLD_RULES+=$'\n'"pass quick $family from any to $addr flags any"$'\n'"pass quick $family from $addr to any flags any"
+          fi
+        done
+        load_rules
         ;;
       release)
         $PFCTL -a "$ANCHOR" -F all >/dev/null 2>&1
@@ -112,7 +141,7 @@ enum KillSwitch {
         fi
         ;;
       *)
-        echo "Usage: $0 {engage|release|status}" >&2
+        echo "Usage: $0 {engage|hold [address...]|release|status}" >&2
         exit 1
         ;;
     esac
@@ -121,7 +150,7 @@ enum KillSwitch {
     static func setupScript(user: String) -> String {
         let helper = Privileged.sudoersPath(helperPath)
         return Privileged.installScript(helperPath: helperPath, helper: helperScript, sudoersPath: sudoersPath,
-                                        grants: ["engage", "release", "status"].map { "\(user) ALL=(root) NOPASSWD: \(helper) \($0)" })
+                                        grants: ["engage", "hold *", "release", "status"].map { "\(user) ALL=(root) NOPASSWD: \(helper) \($0)" })
     }
 
     static let teardownScript = """
@@ -144,6 +173,75 @@ enum KillSwitch {
         return content.firstMatch(of: /WHEREABOUTS_HELPER_VERSION=(\d+)/).flatMap { Int($0.1) } ?? 0
     }
 
+    /// What a hold lets through: the location lookups, DNS to public resolvers (the local
+    /// network's pass already), and, while a tunnel carries the connection, the VPN's server.
+    /// Blocking calls, made as the Mac goes to sleep.
+    static func holdAddresses() -> [String] {
+        let lookups = ["ip-api.com", "ipwho.is"].flatMap(resolveAddresses)
+        let resolvers = (try? runSync("/usr/sbin/scutil", ["--dns"], timeout: 3)).map(parseResolvers)?
+            .first { $0.scopedDomain == nil }?.nameservers.filter { !isPrivateAddress($0) && !isLoopbackAddress($0) } ?? []
+        let passed = lookups + resolvers.prefix(4).map { "dns:\($0)" }
+        guard let probe = lookups.first(where: { !$0.contains(":") }),
+              let route = try? runSync("/sbin/route", ["-n", "get", probe], timeout: 3),
+              isTunnelInterface(route.firstMatch(of: /interface: (\S+)/).map { String($0.1) }) else { return passed }
+        let netstat = ["inet", "inet6"].compactMap { try? runSync("/usr/sbin/netstat", ["-an", "-f", $0], timeout: 3) }.joined()
+        let peers = directPeers(netstat, local: Set(physicalAddresses()))
+        return Array((passed + peers.filter { !lookups.contains($0) }).prefix(64))
+    }
+}
+
+/// The public peers this Mac reaches from a physical interface's own address, from `netstat -an`.
+/// While a tunnel carries the connection, that's the VPN's server, plus whatever bypasses the VPN anyway.
+// ponytail: a VPN on an unconnected socket (wireguard-go) shows no peer here, so a hold can't let it reconnect.
+func directPeers(_ netstat: String, local: Set<String>) -> [String] {
+    // "192.0.2.1.443" → "192.0.2.1"; "*.*" and "*.5353" have no address.
+    func address(_ field: Substring) -> String? {
+        guard !field.hasPrefix("*"), let dot = field.lastIndex(of: ".") else { return nil }
+        return String(field[..<dot])
+    }
+    var peers: [String] = []
+    for line in netstat.split(separator: "\n") {
+        let fields = line.split(separator: " ")
+        guard fields.count >= 5, fields[0].hasPrefix("tcp") || fields[0].hasPrefix("udp"),
+              let mine = address(fields[3]), local.contains(mine),
+              let peer = address(fields[4]), !isPrivateAddress(peer), !peers.contains(peer) else { continue }
+        peers.append(peer)
+    }
+    return peers
+}
+
+/// Numeric addresses of every interface that isn't loopback or a tunnel.
+private func physicalAddresses() -> [String] {
+    var addresses: [String] = []
+    var head: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&head) == 0 else { return [] }
+    defer { freeifaddrs(head) }
+    for ifa in sequence(first: head, next: { $0?.pointee.ifa_next }) {
+        guard let ifa, let addr = ifa.pointee.ifa_addr, Int32(ifa.pointee.ifa_flags) & IFF_LOOPBACK == 0,
+              !isTunnelInterface(String(cString: ifa.pointee.ifa_name)), let text = numericHost(addr) else { continue }
+        addresses.append(text)
+    }
+    return addresses
+}
+
+private func resolveAddresses(_ host: String) -> [String] {
+    var hints = addrinfo()
+    hints.ai_socktype = SOCK_STREAM
+    var head: UnsafeMutablePointer<addrinfo>?
+    guard getaddrinfo(host, nil, &hints, &head) == 0 else { return [] }
+    defer { freeaddrinfo(head) }
+    var addresses: [String] = []
+    for ai in sequence(first: head, next: { $0?.pointee.ai_next }) {
+        if let addr = ai?.pointee.ai_addr, let text = numericHost(addr), !addresses.contains(text) { addresses.append(text) }
+    }
+    return addresses
+}
+
+private func numericHost(_ addr: UnsafePointer<sockaddr>) -> String? {
+    guard [AF_INET, AF_INET6].contains(Int32(addr.pointee.sa_family)) else { return nil }
+    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+    guard getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
+    return String(cString: host)
 }
 
 extension Monitor {
@@ -232,12 +330,14 @@ extension Monitor {
             kill.reason = kill.reason ?? "Network is still blocked from an earlier session."
         } else if !engaged && kill.active {
             kill.active = false
+            kill.held = false
             kill.reason = nil
         }
     }
 
     func activateKillSwitch(_ reason: String) async {
-        guard !kill.active, !killInFlight, !Demo.enabled else { return }
+        // A hold for sleep is a block already, but it lets VPN tunnels through: this one doesn't.
+        guard !kill.active || kill.held, !killInFlight, !Demo.enabled else { return }
         // The user unblocked to reconnect; blocking again inside that window would
         // undo their decision. reblockIfStillWrong() takes over when it ends.
         guard !kill.suppressed else {
@@ -253,6 +353,7 @@ extension Monitor {
         do {
             _ = try await KillSwitch.sudoHelper("engage")
             kill.active = true
+            kill.held = false
             kill.reason = reason
             kill.error = nil
             killActivation += 1
@@ -295,9 +396,52 @@ extension Monitor {
         do {
             _ = try await KillSwitch.sudoHelper("release")
             kill.active = false
+            kill.held = false
             kill.reason = nil
             kill.error = nil
             killActivation += 1
+        } catch {
+            kill.error = "Failed to lift the block. Run this in Terminal, or reboot: \(KillSwitch.manualUnblockCommand)"
+        }
+    }
+
+    /// Going to sleep: block until the first check after waking finds the location allowed, so
+    /// nothing reconnects over a bare connection before the VPN does. The VPN and the app's own
+    /// lookups still get through. Synchronous: macOS waits for this notification's observers.
+    func holdForSleep() {
+        guard settings.killSwitch, settings.holdOnWake, !kill.active, !kill.suppressed, pausedUntil == nil,
+              !killInFlight, !Demo.enabled, KillSwitch.installedVersion() == KillSwitch.helperVersion else { return }
+        let addresses = KillSwitch.holdAddresses()
+        do {
+            _ = try runSync("/usr/bin/sudo", ["-n", KillSwitch.helperPath, "hold"] + addresses, timeout: 5)
+        } catch {
+            kill.error = "Could not hold the network for sleep. Turn the kill switch off and on again to reinstall its helper."
+            log.error("Sleep hold failed: \(error.localizedDescription)")
+            return
+        }
+        kill.active = true
+        kill.held = true
+        kill.reason = "Held since your Mac went to sleep, until a check finds your location allowed."
+        kill.error = nil
+        killActivation += 1
+        // The last answer is from before sleep; the next one decides.
+        geo = GeoStatus()
+        log.info("Network held for sleep, letting \(addresses.count) addresses through")
+    }
+
+    /// The first check after waking found the location allowed.
+    func releaseHold() async {
+        guard kill.held, !killInFlight else { return }
+        killInFlight = true
+        defer { killInFlight = false }
+        do {
+            _ = try await KillSwitch.sudoHelper("release")
+            kill.active = false
+            kill.held = false
+            kill.reason = nil
+            kill.error = nil
+            killActivation += 1
+            log.info("Sleep hold lifted — your location is allowed")
         } catch {
             kill.error = "Failed to lift the block. Run this in Terminal, or reboot: \(KillSwitch.manualUnblockCommand)"
         }

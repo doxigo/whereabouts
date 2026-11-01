@@ -56,8 +56,17 @@ func isPrivateAddress(_ address: String) -> Bool {
         || (a == 100 && (64...127).contains(b))
 }
 
-/// The address a lookup reaches the internet from, from `dig +short txt o-o.myaddr.l.google.com`:
-/// the client subnet a resolver passes on (ECS) if any, else the resolver's own address.
+private let cloudflareResolvers: Set<String> = ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"]
+
+/// The `dig` question that makes `resolver` say where lookups reach it from. Google's names the
+/// client subnet a resolver passes on, but Cloudflare passes none, so Google would only see
+/// Cloudflare; Cloudflare's own whoami names the client.
+func egressQuery(_ resolver: String) -> [String] {
+    cloudflareResolvers.contains(resolver.lowercased()) ? ["@\(resolver)", "ch", "txt", "whoami.cloudflare"] : ["txt", "o-o.myaddr.l.google.com"]
+}
+
+/// The address a lookup reaches the internet from, from `dig +short` with `egressQuery`: the client
+/// subnet a resolver passes on (ECS) if any, else the one address it names.
 func dnsEgress(_ digOutput: String) -> String? {
     let values = digOutput.split(separator: "\n").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) }
     if let ecs = values.first(where: { $0.hasPrefix("edns0-client-subnet ") }) {
@@ -156,7 +165,7 @@ extension Monitor {
         // The settings only hint; a lookup that reports where it left from settles it. Leaving through
         // the VPN's own provider means DNS rides the tunnel, e.g. a VPN on the router that intercepts it.
         if vpnLikely, let exitIsp = baseline?.isp,
-           let out = try? await run("/usr/bin/dig", ["+short", "+time=3", "+tries=1", "txt", "o-o.myaddr.l.google.com"], timeout: 8),
+           let out = try? await run("/usr/bin/dig", ["+short", "+time=3", "+tries=1"] + egressQuery(resolvers[0].address), timeout: 8),
            let egress = dnsEgress(out), let via = await geolocate(egress), ispMatches(via.isp, [exitIsp]) {
             return DnsCheck(state: .ok, resolvers: resolvers,
                             message: "DNS goes to \(list), and lookups leave from \(egress) (\(via.isp ?? exitIsp)), the same provider as your VPN exit, so they ride the tunnel.")

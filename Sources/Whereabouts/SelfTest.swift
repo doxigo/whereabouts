@@ -121,10 +121,41 @@ func selfTest() {
     check(dnsEgress("\"45.13.191.194\"\n") == "45.13.191.194", "DNS egress: resolver address")
     check(dnsEgress("\"172.253.1.2\"\n\"edns0-client-subnet 45.13.191.0/24\"\n") == "45.13.191.0", "DNS egress: client subnet wins")
     check(dnsEgress(";; connection timed out; no servers could be reached\n") == nil, "DNS egress: timeout")
+    check(egressQuery("1.1.1.1").suffix(3) == ["ch", "txt", "whoami.cloudflare"] && egressQuery("8.8.8.8").last == "o-o.myaddr.l.google.com",
+          "Cloudflare is asked its own whoami, which names the client")
 
     // Kill switch helper
     check(KillSwitch.setupScript(user: "alice").contains("alice ALL=(root) NOPASSWD: /Library/Application\\ Support/Whereabouts/killswitch-helper.sh engage"), "sudoers grant")
-    check(KillSwitch.helperScript.contains("# WHEREABOUTS_HELPER_VERSION=1\n") && KillSwitch.helperScript.contains("\nWA_RULES\n"), "helper script")
+    check(KillSwitch.helperScript.contains("# WHEREABOUTS_HELPER_VERSION=2\n") && KillSwitch.helperScript.contains("\nWA_RULES\n"), "helper script")
+    check(KillSwitch.setupScript(user: "alice").contains("killswitch-helper.sh hold *"), "sudoers grant for the sleep hold")
+    // The hold checks its own arguments before touching pf, so that runs unprivileged.
+    let killPath = NSTemporaryDirectory() + "wa-selftest-kill.sh"
+    try? KillSwitch.helperScript.write(toFile: killPath, atomically: true, encoding: .utf8)
+    func holdStatus(_ args: [String]) -> Int32 {
+        do { _ = try runSync("/bin/bash", [killPath, "hold"] + args, timeout: 10); return 0 }
+        catch let error as ShellError { return error.status }
+        catch { return -1 }
+    }
+    for bad in [["192.0.2.1; pass all"], ["any"], ["192.0.2.1/0"], ["{ 0.0.0.0/0 }"], ["2001:db8::1 to any"], ["dns:any"], ["dns:dns:192.0.2.1"],
+                Array(repeating: "192.0.2.1", count: 65)] {
+        check(holdStatus(bad) == 2, "hold rejects \(bad.prefix(2))")
+    }
+    // A normal user gets past validation, then can't read pf (exit 5).
+    if getuid() != 0 { check(holdStatus(["192.0.2.1", "2001:db8::1", "dns:192.0.2.53", "dns:2001:db8::53"]) == 5, "hold accepts addresses") }
+    try? FileManager.default.removeItem(atPath: killPath)
+    let netstat = """
+    Active Internet connections (including servers)
+    Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
+    tcp4       0      0  10.64.0.2.52258        203.0.113.10.443       ESTABLISHED
+    tcp4       0      0  192.168.1.20.52257     198.51.100.7.443       ESTABLISHED
+    udp4       0      0  192.168.1.20.61000     198.51.100.7.51820
+    tcp4       0      0  192.168.1.20.52300     192.168.1.1.80         ESTABLISHED
+    udp4       0      0  *.5353                 *.*
+    tcp6       0      0  2001:db8::20.52310     2001:db8:1::5.443      ESTABLISHED
+    tcp46      0      0  *.59461                *.*                    LISTEN
+    """
+    let peers = directPeers(netstat, local: ["192.168.1.20", "2001:db8::20"])
+    check(peers == ["198.51.100.7", "2001:db8:1::5"], "direct peers: only public ones from a physical address, once: \(peers)")
     for (name, script) in [("setup", KillSwitch.setupScript(user: "alice")), ("teardown", KillSwitch.teardownScript), ("helper", KillSwitch.helperScript)] {
         let path = NSTemporaryDirectory() + "wa-selftest-\(name).sh"
         try? script.write(toFile: path, atomically: true, encoding: .utf8)
@@ -344,6 +375,23 @@ func selfTest() {
     exitElsewhere.timeZone = "Etc/GMT-2"
     check(warned(zoneOnly, at: exitElsewhere) == [.timeZone], "a place without a country on another zone than the exit")
     check(warned(zoneOnly).isEmpty, "a place without a country on the exit's zone")
+
+    // Computer name
+    let owner = ["alice", "liddell", "aliddell"]
+    check(ComputerName.mentions("Alice's MacBook Pro", owner) && ComputerName.mentions("Alices-MacBook-Pro", owner)
+          && ComputerName.mentions("aliddell-mbp", owner), "computer names that give the owner away")
+    check(!ComputerName.mentions("MacBook Pro", owner) && !ComputerName.mentions("Malice", owner), "whole words only")
+    check(ComputerName.suggestion("Alice’s MacBook Pro", owner) == "MacBook Pro", "suggestion drops the owner's name")
+    check(ComputerName.suggestion("alice", owner) == "Mac" && ComputerName.suggestion(nil, owner) == "Mac", "suggestion falls back to Mac")
+    check(ComputerName.hostName("Studio Mac (2)") == "Studio-Mac-2" && ComputerName.hostName("☕️") == "Mac", "Bonjour name")
+    var namedMac = MacFacts(timeZone: "Etc/GMT-1", automaticZone: false, region: "XB",
+                         computerName: ComputerName.Names(name: "Alice's MacBook Pro", host: "Alices-MacBook-Pro"), ownerWords: owner)
+    check(kinds(namedMac, vpn: false) == [.computerName], "the computer name warns with or without a VPN")
+    var nameOff = AppSettings()
+    nameOff.warnComputerName = false
+    check(kinds(namedMac, nameOff).isEmpty, "computer name warning off")
+    namedMac.computerName = ComputerName.Names(name: "MacBook Pro", host: "MacBook-Pro")
+    check(kinds(namedMac).isEmpty, "a generic name doesn't warn")
 
     // status.json: git-ip-guard reads these exact names. Whole seconds; unknowns left out.
     let regional = Location(ip: "198.51.100.1", country: "Exit Country", countryCode: "XB", region: "Exit Region", isp: "Tunnel Provider AB", isVpn: true)

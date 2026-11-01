@@ -87,6 +87,8 @@ struct AppSettings: Codable, Equatable {
     var menuBarClock = MenuBarClock.date
     var launchAtLogin = false
     var killSwitch = false
+    /// While the Mac sleeps, block all but the VPN and the app's lookups, until a check after waking passes.
+    var holdOnWake = false
     var ispMode = IspMode.off
     var expectedIsps: [String] = []
     var alertOnIspChange = false
@@ -107,6 +109,8 @@ struct AppSettings: Codable, Equatable {
     var warnTimeZone = true
     var warnAutomaticZone = true
     var warnRegion = true
+    /// Warn when the computer name, which every network you join sees, includes your own.
+    var warnComputerName = true
     /// Once a day, ask GitHub whether a newer release is out.
     var checkUpdates = true
     /// Install a newer release found by that check, then relaunch.
@@ -166,6 +170,7 @@ extension AppSettings {
         menuBarClock = c.get(.menuBarClock, menuBarClock)
         launchAtLogin = c.get(.launchAtLogin, launchAtLogin)
         killSwitch = c.get(.killSwitch, killSwitch)
+        holdOnWake = c.get(.holdOnWake, holdOnWake)
         ispMode = c.get(.ispMode, ispMode)
         expectedIsps = c.get(.expectedIsps, expectedIsps)
         alertOnIspChange = c.get(.alertOnIspChange, alertOnIspChange)
@@ -180,6 +185,7 @@ extension AppSettings {
         warnTimeZone = c.get(.warnTimeZone, warnTimeZone)
         warnAutomaticZone = c.get(.warnAutomaticZone, warnAutomaticZone)
         warnRegion = c.get(.warnRegion, warnRegion)
+        warnComputerName = c.get(.warnComputerName, warnComputerName)
         checkUpdates = c.get(.checkUpdates, checkUpdates)
         installUpdates = c.get(.installUpdates, installUpdates)
         shareStatus = c.get(.shareStatus, shareStatus)
@@ -311,6 +317,8 @@ struct KillSwitchStatus {
     /// The setting is on but the installed helper is missing or outdated.
     var needsSetup = false
     var error: String?
+    /// The block is a hold for sleep, which lets VPN tunnels through until a check after waking passes.
+    var held = false
     /// Manually unblocked: standing down until then (or until every monitor is clear),
     /// so the VPN can reconnect. At that time it blocks again if the location still isn't allowed.
     var reblockAt: Date?
