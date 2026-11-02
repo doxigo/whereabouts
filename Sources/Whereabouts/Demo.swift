@@ -70,8 +70,10 @@ enum Demo {
                                  message: blocked ? "bank.example expects Lisbon, Portugal, but you're in Ashburn, United States."
                                      : "bank.example expects Lisbon, Portugal, and that's where you are.")
         m.leak = LeakStatus(
-            ipv6: Ipv6Check(state: .ok, ip: "2001:db8:4a::17", isp: "Example Transit",
+            ipv6: ExitCheck(state: .ok, ip: "2001:db8:4a::17", isp: "Example Transit",
                             message: "Your IPv6 exit is in Portugal too."),
+            udp: ExitCheck(state: .ok, ip: "203.0.113.42", isp: "Example Transit",
+                           message: "UDP leaves from your IP address too, so WebRTC shows sites nothing new."),
             dns: DnsCheck(state: .ok, resolvers: [DnsResolver(address: "10.64.0.1", iface: "utun4", isPrivate: true)],
                           message: "DNS goes through the VPN tunnel."))
         // With the kill switch engaged nothing past the local network answers.

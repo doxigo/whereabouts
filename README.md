@@ -7,7 +7,7 @@ A macOS menu-bar app that keeps checking where the internet thinks your Mac is, 
 Whereabouts doesn't ask whether your VPN is connected. It asks where you appear to be and acts on that answer. On an interval it looks up the location of your public IP, checks it against your rules, and shows the answer in the menu bar as a place: a country code, a flag or a city.
 
 > [!TIP]
-> **Pairs with [Alibi](https://github.com/doxigo/alibi), its companion browser extension.** Whereabouts covers the Mac: where your IP appears to be, and whether the Mac's time zone, region, DNS and IPv6 tell the same story. Alibi covers the browser: a Chrome extension that sets the time zone, geolocation and locale sites see to match your VPN, for every site or one at a time. Run both and the Mac and the browser agree with your connection. See what sites see on Alibi's [check page](https://doxigo.github.io/alibi/).
+> **Pairs with [Alibi](https://github.com/doxigo/alibi), its companion browser extension.** Whereabouts covers the Mac: where your IP appears to be, and whether the Mac's time zone, region, DNS, IPv6 and UDP tell the same story. Alibi covers the browser: a Chrome extension that sets the time zone, geolocation and locale sites see to match your VPN, for every site or one at a time. Run both and the Mac and the browser agree with your connection. See what sites see on Alibi's [check page](https://doxigo.github.io/alibi/).
 
 ## Screenshots
 
@@ -27,7 +27,7 @@ The screenshots use made-up data from the app's demo mode (`--demo`). `Branding/
 - **Country rules.** Allow or block countries.
 - **Per-site rules.** Give a site its own location rule. Whereabouts watches the active browser tab through Apple Events and checks that site's rule against where you appear to be. Firefox-family browsers don't support this, so they get a best-effort read through Accessibility instead.
 - **ISP checks.** Keep an allowlist of expected ISPs, and get an alert when the ISP changes.
-- **Leak checks.** It also checks the quieter ways a location leaks: the IPv6 exit and the DNS resolvers. A leak sends a notification, but it never engages the kill switch.
+- **Leak checks.** It also checks the quieter ways a location leaks: the IPv6 exit, the address UDP leaves from, and the DNS resolvers. UDP is what WebRTC uses, so its address is one any page can read. When it's another address in the same place, as happens when a proxy sends some connections out a second address, Whereabouts flags it without calling it a leak: the place is right, but a site sees two addresses for one visitor. A leak sends a notification, but it never engages the kill switch.
 - **Alerts.** Choose how a wrong location reaches you: a colored menu-bar item, a notification, a sound, a red line along the top of every screen. Turning the VPN off on purpose? **Pause for 1 Hour** in the menu holds the alerts and the kill switch.
 - **Kill switch.** Cuts internet traffic on a country or ISP violation, or on a per-site rule that asks for it. If you unblock by hand, you get two minutes to reconnect your VPN: if the location still isn't allowed then, it blocks again. It re-arms sooner once every check is clear. With **Confirm before blocking** on, a second lookup provider cross-checks each violation. If the two disagree, the kill switch waits for the next check to agree.
 - **Hold the network during sleep.** Apps reconnect the moment the Mac wakes, often before the VPN does, and that first connection goes out over your own ISP. With this on (Settings › Protection, off by default, needs the kill switch), Whereabouts blocks traffic as the Mac goes to sleep and lifts the block once the first check after waking finds your location allowed. While it holds, only your VPN and Whereabouts' own lookups get through. See [the details](#holding-the-network-during-sleep).
@@ -89,7 +89,7 @@ The hold needs version 2 of the helper, which adds the `hold` subcommand to the 
 
 ### Where lookups go
 
-Location lookups go to [ip-api.com](https://ip-api.com) on its free HTTP tier, the one provider that flags VPN and proxy exits, with [ipwho.is](https://ipwho.is) as a fallback. The IPv6 exit is read from `api6.ipify.org` or `ipv6.icanhazip.com`. With **Check for updates** on (Settings › About), it asks `api.github.com` once a day for the latest release; with **Install updates automatically** also on, it downloads that release's disk image from GitHub and restarts with it.
+Location lookups go to [ip-api.com](https://ip-api.com) on its free HTTP tier, the one provider that flags VPN and proxy exits, with [ipwho.is](https://ipwho.is) as a fallback. The IPv6 exit is read from `api6.ipify.org` or `ipv6.icanhazip.com`, then from the dual-stack `api64.ipify.org` or `icanhazip.com`, which a proxy on the way may reach over IPv6 even when the Mac has none. The UDP exit comes from the STUN servers `stun.l.google.com` and `stun.cloudflare.com`, the ones WebRTC pages often ask. With **Check for updates** on (Settings › About), it asks `api.github.com` once a day for the latest release; with **Install updates automatically** also on, it downloads that release's disk image from GitHub and restarts with it.
 
 ## Reading the menu-bar glyph
 

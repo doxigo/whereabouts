@@ -34,7 +34,7 @@ final class Monitor {
     /// The place the Mac's clock follows: Alibi's, with Match time zone and Follow Alibi's location on.
     var alibiPlace: AlibiWish? { followedPlace(alibiWish, settings) }
 
-    var leaking: Bool { leak.ipv6.state == .leak || leak.dns.state == .leak }
+    var leaking: Bool { leak.ipv6.state == .leak || leak.udp.state == .leak || leak.dns.state == .leak }
     var edgeLineVisible: Bool {
         pausedUntil == nil && ((settings.alerts.edgeLine && geo.kind == .violation)
             || (site.state == .mismatch && site.rule?.edgeLine == true))
@@ -58,6 +58,7 @@ final class Monitor {
     @ObservationIgnored private var prevKind: GeoKind?
     @ObservationIgnored private var prevCode: String?
     @ObservationIgnored private var prevIsp: String?
+    @ObservationIgnored private var prevAsn: Int?
     @ObservationIgnored private var unknownStreak = 0
     /// A violation the cross-check disputed: the kill switch waits one more check.
     @ObservationIgnored private var killDeferred = false
@@ -161,7 +162,7 @@ final class Monitor {
         if old.browserWatch != next.browserWatch || old.siteRules != next.siteRules {
             Task { await checkSite() }
         }
-        if !interval && (old.ipv6Check != next.ipv6Check || old.dnsCheck != next.dnsCheck) { Task { await checkLeaks() } }
+        if !interval && (old.ipv6Check != next.ipv6Check || old.udpCheck != next.udpCheck || old.dnsCheck != next.dnsCheck) { Task { await checkLeaks() } }
         if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion
             || old.followAlibi != next.followAlibi) {
             Task { await syncTimeZone() }
@@ -449,7 +450,9 @@ final class Monitor {
         let becameViolation = status.kind == .violation && prevKind != .violation
         let recovered = status.kind == .safe && prevKind == .violation
         // Same country, new provider: invisible to the country rule, and exactly what a silent VPN drop looks like.
-        let ispChangedTo = settings.alertOnIspChange && isp != nil && prevIsp != nil && isp != prevIsp ? isp : nil
+        // A new name on the same AS number is the other lookup service naming it its own way.
+        let asn = status.location?.asn
+        let ispChangedTo = settings.alertOnIspChange && isp != nil && prevIsp != nil && isp != prevIsp && (asn == nil || asn != prevAsn) ? isp : nil
 
         // One failed lookup is nearly always a blip; log it only once it persists.
         unknownStreak = status.kind == .unknown ? unknownStreak + 1 : 0
@@ -476,7 +479,7 @@ final class Monitor {
         if settings.matchTimeZone { Task { await syncTimeZone() } }
         prevKind = status.kind
         prevCode = code
-        if let isp { prevIsp = isp }
+        if let isp { prevIsp = isp; prevAsn = asn }
         return status
     }
 

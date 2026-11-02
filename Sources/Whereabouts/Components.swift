@@ -11,6 +11,23 @@ enum Tone {
         case .neutral, .loading: .secondary
         }
     }
+
+    /// For text in this tone. System orange and red are too light for text on a light menu or window
+    /// (orange is under 2:1 there), so light mode gets darker values that clear 4.5:1.
+    var textColor: Color {
+        switch self {
+        case .error: Self.text(light: 0xC4001A, dark: 0xFF6961)
+        case .warning: Self.text(light: 0xA84300, dark: 0xFF9F0A)
+        default: color
+        }
+    }
+
+    private static func text(light: Int, dark: Int) -> Color {
+        func rgb(_ v: Int) -> NSColor {
+            NSColor(srgbRed: CGFloat(v >> 16 & 0xFF) / 255, green: CGFloat(v >> 8 & 0xFF) / 255, blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+        }
+        return Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? rgb(dark) : rgb(light) })
+    }
 }
 
 /// Colored dot + label, the status indicator used throughout.

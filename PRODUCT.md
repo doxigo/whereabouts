@@ -18,7 +18,7 @@ Whereabouts answers one question continuously: where does the internet think thi
 
 ## Positioning
 
-It doesn't ask whether the VPN is connected; it asks where you appear to be and acts on that answer. Rules are about places: allowed or blocked countries, per-site location rules matched against the active browser tab, expected ISPs. It also checks the quieter ways a location leaks: the IPv6 exit and the DNS resolvers.
+It doesn't ask whether the VPN is connected; it asks where you appear to be and acts on that answer. Rules are about places: allowed or blocked countries, per-site location rules matched against the active browser tab, expected ISPs. It also checks the quieter ways a location leaks: the IPv6 exit, the UDP exit (what WebRTC shows) and the DNS resolvers.
 
 ## Operating Context
 
@@ -28,7 +28,7 @@ It doesn't ask whether the VPN is connected; it asks where you appear to be and 
 
 ## Capabilities and Constraints
 
-- Country allow/block rules, per-site location rules (browser tab watch via Apple Events), ISP allowlist and change alerts, violation confirmation, IPv6 and DNS leak checks, kill switch with pause and re-arm, history.
+- Country allow/block rules, per-site location rules (browser tab watch via Apple Events), ISP allowlist and change alerts, violation confirmation, IPv6, UDP and DNS leak checks, kill switch with pause and re-arm, history.
 - Built with SwiftPM and Command Line Tools only (no Xcode): no asset catalogs, no `actool`, no Icon Composer `.icon` compile. The app icon ships as `Resources/AppIcon.icns` built with `iconutil`; `build.sh` copies only the binary, Info.plist and the icns.
 - Bundle id `com.doxigo.Whereabouts`; successor to the user's earlier Glaze app GeoMeister, with settings/history import.
 

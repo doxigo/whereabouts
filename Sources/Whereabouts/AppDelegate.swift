@@ -141,30 +141,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     /// The status window's essentials, a labeled row each: exit, VPN, leak checks, Mac time zone.
-    private func shortStatus() -> [(label: String, value: String)] {
+    /// A row that's off carries its tone: red for a leak, orange for a warning.
+    private func shortStatus(_ warnings: [ConsistencyWarning]) -> [MenuHeader.Row] {
         let m = monitor, loc = m.geo.location
-        let rows: [(String, String?)] = [
-            ("IP", loc?.ip),
-            ("Provider", loc?.isp),
-            ("VPN", m.geo.vpnName ?? loc?.isVpn.map { $0 ? "Detected" : "Not detected" }),
-            ("DNS", m.leak.dns.state == .off ? nil : m.leak.dns.state.label),
-            ("IPv6", m.leak.ipv6.state == .off ? nil : m.leak.ipv6.state.label),
-            ("Time zone", zoneName(m.systemTimeZone)),
+        // A check turned off isn't listed.
+        func check(_ label: String, disabled: Bool, _ value: String, _ tone: Tone) -> (String, String?, Tone?) {
+            (label, disabled ? nil : value, tone == .error || tone == .warning ? tone : nil)
+        }
+        let rows: [(String, String?, Tone?)] = [
+            ("IP", loc?.ip, nil),
+            ("Provider", loc?.isp, nil),
+            ("VPN", m.geo.vpnName ?? loc?.isVpn.map { $0 ? "Detected" : "Not detected" }, nil),
+            check("DNS", disabled: m.leak.dns.state == .off, m.leak.dns.state.label, m.leak.dns.state.tone),
+            check("IPv6", disabled: m.leak.ipv6.state == .off, m.leak.ipv6.state.label, m.leak.ipv6.state.tone),
+            check("UDP", disabled: m.leak.udp.state == .off, m.leak.udp.state.label, m.leak.udp.state.tone),
+            ("Time zone", zoneName(m.systemTimeZone), warnings.contains { $0.kind == .timeZone || $0.kind == .automaticZone } ? .warning : nil),
         ]
-        return rows.compactMap { row in row.1.map { (row.0, $0) } }
+        return rows.compactMap { row in row.1.map { MenuHeader.Row(label: row.0, value: $0, tone: row.2) } }
+    }
+
+    private func headerContent() -> MenuHeader.Content {
+        let m = monitor
+        let (mark, color) = statusMark()
+        let checked = m.geo.checkedAt.map { " · checked \($0.formatted(.relative(presentation: .named)))" } ?? ""
+        return MenuHeader.Content(
+            glyph: StampGlyph.image(mark, color: color),
+            title: m.kill.active ? "Internet blocked" : m.geo.kind == .offline ? "No connection" : m.geo.location?.cityPlace ?? "Location unknown",
+            detail: m.kill.active ? (m.kill.held ? "Held since sleep" : "Kill switch engaged") : m.geoBadge.label + checked,
+            issues: m.connectionIssues,
+            status: m.kill.active ? [] : shortStatus(m.consistency))
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let m = monitor
         menu.removeAllItems()
-        let (mark, color) = statusMark()
-        let checked = m.geo.checkedAt.map { " · checked \($0.formatted(.relative(presentation: .named)))" } ?? ""
-        menu.addItem(headerItem(MenuHeader(
-            glyph: StampGlyph.image(mark, color: color),
-            title: m.kill.active ? "Internet blocked" : m.geo.kind == .offline ? "No connection" : m.geo.location?.cityPlace ?? "Location unknown",
-            detail: m.kill.active ? (m.kill.held ? "Held since sleep" : "Kill switch engaged") : m.geoBadge.label + checked,
-            warning: m.leaking ? m.leakHeadline : nil,
-            status: m.kill.active ? [] : shortStatus())) { [weak self] in self?.showStatus() })
+        menu.addItem(headerItem(MenuHeader { [unowned self] in headerContent() }) { [weak self] in self?.showStatus() })
 
         let warnings = m.consistency
         if !warnings.isEmpty {
@@ -378,35 +389,62 @@ private final class MenuRowView<Content: View>: NSHostingView<Content> {
         enclosingMenuItem?.menu?.cancelTracking()
         onClick()
     }
+
+    // The content can change while the menu is open (a check finishing adds an issue line), so the
+    // frame follows it. SwiftUI relays out without invalidating the intrinsic size, so this watches
+    // layout, and resizes on the next turn rather than mid-layout.
+    override func layout() {
+        super.layout()
+        let fit = fittingSize
+        guard fit.height != frame.height || fit.width > frame.width else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            setFrameSize(NSSize(width: max(fit.width, frame.width), height: fit.height))
+        }
+    }
 }
 
 /// The menu's first row: the verdict at full contrast, where a disabled item would grey it out.
 private struct MenuHeader: View {
-    let glyph: NSImage
-    let title: String
-    let detail: String
-    let warning: String?
-    let status: [(label: String, value: String)]
+    /// Read in `body`, so the header follows the monitor while the menu is open instead of
+    /// showing what it was when the menu opened.
+    let read: () -> Content
     @State private var hovering = false
 
+    struct Content {
+        var glyph: NSImage
+        var title: String
+        var detail: String
+        var issues: [String]
+        var status: [Row]
+    }
+
+    struct Row {
+        var label: String
+        var value: String
+        /// Set only when the row is off.
+        var tone: Tone?
+    }
+
     var body: some View {
+        let c = read()
         HStack(alignment: .top, spacing: 8) {
-            Image(nsImage: glyph).padding(.top, 1)
+            Image(nsImage: c.glyph).padding(.top, 1)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .semibold))
-                Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
-                if let warning { Text(warning).font(.system(size: 11)).foregroundStyle(.orange) }
+                Text(c.title).font(.system(size: 13, weight: .semibold))
+                Text(c.detail).font(.system(size: 11)).foregroundStyle(.secondary)
+                ForEach(c.issues, id: \.self) { Text($0).font(.system(size: 11)).foregroundStyle(Tone.warning.textColor) }
                 // Labels in a column of their own, so each value is found at a glance.
                 Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 2) {
-                    ForEach(status, id: \.label) { row in
+                    ForEach(c.status, id: \.label) { row in
                         GridRow {
                             Text(row.label).foregroundStyle(.secondary)
-                            Text(row.value)
+                            Text(row.value).foregroundStyle(row.tone?.textColor ?? .primary)
                         }
                     }
                 }
                 .font(.system(size: 11)).monospacedDigit()
-                .padding(.top, status.isEmpty ? 0 : 5)
+                .padding(.top, c.status.isEmpty ? 0 : 5)
             }
         }
         .padding(.horizontal, 14)

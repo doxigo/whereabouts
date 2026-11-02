@@ -120,6 +120,62 @@ func anyReachable(_ targets: [(String, UInt16)] = [("1.1.1.1", 443), ("8.8.8.8",
     }
 }
 
+// MARK: - STUN
+
+private let stunCookie: [UInt8] = [0x21, 0x12, 0xA4, 0x42]
+
+/// A STUN binding request (RFC 5389), the question WebRTC asks: which address did this come from?
+func stunRequest(_ transaction: [UInt8]) -> Data { Data([0x00, 0x01, 0x00, 0x00] + stunCookie + transaction) }
+
+/// The address in a STUN server's answer to `transaction`: XOR-MAPPED-ADDRESS, or the older MAPPED-ADDRESS
+/// that some NATs rewrite. nil for anything else.
+// ponytail: IPv4 only; stunAddress asks over IPv4.
+func stunMappedAddress(_ data: Data, transaction: [UInt8]) -> String? {
+    let b = [UInt8](data)
+    guard b.count >= 20, b[0] == 0x01, b[1] == 0x01, Array(b[4..<8]) == stunCookie, Array(b[8..<20]) == transaction else { return nil }
+    var plain: String?
+    var i = 20
+    while i + 4 <= b.count {
+        let type = Int(b[i]) << 8 | Int(b[i + 1]), length = Int(b[i + 2]) << 8 | Int(b[i + 3])
+        let value = b.dropFirst(i + 4).prefix(length)
+        if value.count == 8, value[value.startIndex + 1] == 0x01 {
+            let address = value.suffix(4)
+            if type == 0x0020 { return zip(address, stunCookie).map { String($0 ^ $1) }.joined(separator: ".") }
+            if type == 0x0001 { plain = address.map(String.init).joined(separator: ".") }
+        }
+        i += 4 + (length + 3) / 4 * 4
+    }
+    return plain
+}
+
+/// The address `host` saw a UDP request from this Mac come from, as a page's WebRTC would learn it.
+/// Over IPv4, so it compares with the IPv4 exit; the IPv6 check covers the rest.
+func stunAddress(_ host: String, _ port: UInt16, timeout: TimeInterval = 4) async -> String? {
+    let parameters = NWParameters.udp
+    (parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.version = .v4
+    let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: parameters)
+    let transaction = (0..<12).map { _ in UInt8.random(in: 0...255) }
+    return await withCheckedContinuation { cont in
+        let once = Once()
+        let finish: (String?) -> Void = { result in
+            guard once.claim() else { return }
+            connection.cancel()
+            cont.resume(returning: result)
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                connection.send(content: stunRequest(transaction), completion: .contentProcessed { if $0 != nil { finish(nil) } })
+                connection.receiveMessage { data, _, _, _ in finish(data.flatMap { stunMappedAddress($0, transaction: transaction) }) }
+            case .failed, .cancelled, .waiting: finish(nil)
+            default: break
+            }
+        }
+        connection.start(queue: .global())
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { finish(nil) }
+    }
+}
+
 // MARK: - Interfaces
 
 /// Interfaces carrying a non-loopback IPv4 address.
@@ -154,12 +210,12 @@ private func string(_ d: [String: Any], _ key: String) -> String? { d[key] as? S
 /// address it geolocates that address instead of this machine's exit.
 func fetchIpApi(_ ip: String? = nil) async throws -> Location {
     let path = ip?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
-    let d = try await fetchJSON("http://ip-api.com/json/\(path)?fields=status,message,query,country,countryCode,regionName,city,isp,proxy,hosting,timezone,lat,lon")
+    let d = try await fetchJSON("http://ip-api.com/json/\(path)?fields=status,message,query,country,countryCode,regionName,city,isp,as,proxy,hosting,timezone,lat,lon")
     guard string(d, "status") == "success" else { throw HTTPError(status: -2) }
     let proxy = d["proxy"] as? Bool, hosting = d["hosting"] as? Bool
     return Location(ip: string(d, "query"), country: string(d, "country"),
                     countryCode: string(d, "countryCode")?.uppercased(), region: string(d, "regionName"), city: string(d, "city"),
-                    isp: string(d, "isp"),
+                    isp: string(d, "isp"), asn: string(d, "as").flatMap(asNumber),
                     isVpn: proxy == nil && hosting == nil ? nil : (proxy ?? false) || (hosting ?? false),
                     timeZone: string(d, "timezone"), lat: d["lat"] as? Double, lon: d["lon"] as? Double)
 }
@@ -172,7 +228,7 @@ func fetchIpWho(_ ip: String? = nil) async throws -> Location {
     let connection = d["connection"] as? [String: Any] ?? [:]
     return Location(ip: string(d, "ip"), country: string(d, "country"),
                     countryCode: string(d, "country_code")?.uppercased(), region: string(d, "region"), city: string(d, "city"),
-                    isp: string(connection, "isp") ?? string(connection, "org"), isVpn: nil,
+                    isp: string(connection, "isp") ?? string(connection, "org"), asn: connection["asn"] as? Int, isVpn: nil,
                     timeZone: (d["timezone"] as? [String: Any]).flatMap { string($0, "id") },
                     lat: d["latitude"] as? Double, lon: d["longitude"] as? Double)
 }
@@ -197,6 +253,18 @@ func networkKey(_ ip: String) -> String {
     if location == nil { location = try? await fetchIpApi(ip) }
     if let location { geolocated[key] = (Date(), location) }
     return location
+}
+
+/// ip-api's "AS56655 Gigahost AS" → 56655.
+func asNumber(_ text: String) -> Int? {
+    text.split(separator: " ").first.flatMap { $0.hasPrefix("AS") ? Int($0.dropFirst(2)) : nil }
+}
+
+/// Whether two lookups found the same network. Each service names it its own way (ip-api: "TERRAHOST",
+/// ipwho.is: "Gigahost AS"), so the AS number settles it when both have one.
+func sameNetwork(_ a: Location, _ b: Location) -> Bool {
+    if let x = a.asn, let y = b.asn { return x == y }
+    return ispMatches(a.isp, [b.isp ?? ""])
 }
 
 /// Provider names drift ("Mullvad VPN AB" vs "Mullvad"), so match a fragment either way.

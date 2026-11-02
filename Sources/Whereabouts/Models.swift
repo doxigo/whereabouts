@@ -94,6 +94,8 @@ struct AppSettings: Codable, Equatable {
     var alertOnIspChange = false
     var confirmViolations = true
     var ipv6Check = true
+    /// Compare the address UDP leaves from (what WebRTC shows sites) with the IPv4 exit.
+    var udpCheck = true
     var dnsCheck = true
     /// Set the Mac's time zone and region to the connection's while a VPN is up.
     var matchTimeZone = false
@@ -176,6 +178,7 @@ extension AppSettings {
         alertOnIspChange = c.get(.alertOnIspChange, alertOnIspChange)
         confirmViolations = c.get(.confirmViolations, confirmViolations)
         ipv6Check = c.get(.ipv6Check, ipv6Check)
+        udpCheck = c.get(.udpCheck, udpCheck)
         dnsCheck = c.get(.dnsCheck, dnsCheck)
         matchTimeZone = c.get(.matchTimeZone, matchTimeZone)
         homeTimeZone = c.get(.homeTimeZone, homeTimeZone)
@@ -221,6 +224,8 @@ struct Location: Equatable {
     var region: String?
     var city: String?
     var isp: String?
+    /// The network's AS number: one network whatever name each lookup gives it.
+    var asn: Int?
     /// nil = the provider can't tell.
     var isVpn: Bool?
     /// IANA zone identifier of the exit.
@@ -281,11 +286,12 @@ struct SiteWatchStatus: Equatable {
     var message = "Browser monitoring is off."
 }
 
-enum Ipv6State { case off, checking, none, ok, leak, unknown }
+/// IPv6 and UDP exits. `differs`: another address in the same place, which a site can still set side by side.
+enum ExitState { case off, checking, none, ok, differs, leak, unknown }
 enum DnsState { case off, checking, ok, leak, inconclusive, unknown }
 
-struct Ipv6Check {
-    var state: Ipv6State
+struct ExitCheck {
+    var state: ExitState
     var ip: String?
     var isp: String?
     var message: String
@@ -307,7 +313,8 @@ struct DnsCheck {
 }
 
 struct LeakStatus {
-    var ipv6 = Ipv6Check(state: .checking, message: "Checking your IPv6 exit…")
+    var ipv6 = ExitCheck(state: .checking, message: "Checking your IPv6 exit…")
+    var udp = ExitCheck(state: .checking, message: "Checking where UDP leaves from…")
     var dns = DnsCheck(state: .checking, message: "Checking your DNS resolvers…")
 }
 

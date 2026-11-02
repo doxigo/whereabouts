@@ -167,7 +167,7 @@ struct TimeZoneSettings: View {
             Toggle(isOn: m.binding(\.followAlibi)) {
                 Text("Follow Alibi's location")
                 // Off by default and best left off: it puts the Mac somewhere the IP isn't.
-                Text("\(Image(systemName: "exclamationmark.triangle.fill")) Not recommended.").foregroundStyle(.orange)
+                Text("\(Image(systemName: "exclamationmark.triangle.fill")) Not recommended.").foregroundStyle(Tone.warning.textColor)
                     + Text(" Uses the time zone and region of Alibi's place for all sites instead of your connection's, so your Mac no longer matches your IP address.")
             }
             .disabled(!m.settings.matchTimeZone)
@@ -177,7 +177,7 @@ struct TimeZoneSettings: View {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Date-Time-Settings.extension")!)
                     }
                 } label: {
-                    Label("Automatic time zone is on", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Label("Automatic time zone is on", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Tone.warning.textColor)
                     Text("Turn off “Set time zone automatically using your current location” in General › Date & Time, or macOS will keep switching it back.")
                 }
             }
@@ -198,7 +198,7 @@ struct TimeZoneSettings: View {
                 LabeledContent("Alibi's location", value: zoneName(zone))
             }
             if let error = m.timeZoneError {
-                Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
+                Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(Tone.error.textColor)
             }
         } header: {
             Text("Time zone and region")
@@ -502,7 +502,7 @@ struct ProtectionSettings: View {
                     }
                 }
                 if let error = m.kill.error {
-                    Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
+                    Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(Tone.error.textColor)
                 }
             } header: {
                 Text("Kill switch")
@@ -514,7 +514,7 @@ struct ProtectionSettings: View {
                 Section {
                     Label("Armed — a location that isn't allowed immediately blocks all internet traffic, including VPN tunnels. Wi-Fi stays connected and your local network keeps working.",
                           systemImage: "exclamationmark.shield.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Tone.error.textColor)
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Quitting Whereabouts lifts the block, and nothing is written to your network settings, so a reboot always restores traffic. If it's force-quit while blocked, run this in Terminal:")
                             .foregroundStyle(.secondary)
@@ -539,11 +539,12 @@ struct ProtectionSettings: View {
 
             Section {
                 Toggle(isOn: m.binding(\.ipv6Check)) { Text("IPv6 exit"); Text("Compare where IPv6 traffic exits with your IPv4 location.") }
+                Toggle(isOn: m.binding(\.udpCheck)) { Text("UDP exit"); Text("Compare the address UDP leaves from, which WebRTC shows sites, with your IP address.") }
                 Toggle(isOn: m.binding(\.dnsCheck)) { Text("DNS resolvers"); Text("Check whether DNS queries are resolved outside your tunnel.") }
             } header: {
                 Text("Leak checks")
             } footer: {
-                Footer("The two paths that bypass a VPN even when your IPv4 exit looks right.")
+                Footer("The paths that can bypass a VPN even when your IPv4 exit looks right.")
             }
 
             Section {
@@ -585,7 +586,7 @@ struct ProtectionSettings: View {
                     .disabled(trimmed.isEmpty || trimmed == current)
             }
             if let error = m.renameError {
-                Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(.red)
+                Label(error, systemImage: "exclamationmark.octagon.fill").foregroundStyle(Tone.error.textColor)
             }
         } header: {
             Text("Computer name")

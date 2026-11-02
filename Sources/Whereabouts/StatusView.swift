@@ -10,7 +10,7 @@ struct StatusView: View {
             Section { hero }
             if m.settings.browserWatch && m.site.state != .disabled { activeSite }
             location
-            if m.leak.ipv6.state != .off || m.leak.dns.state != .off { leakChecks }
+            if m.leak.ipv6.state != .off || m.leak.udp.state != .off || m.leak.dns.state != .off { leakChecks }
             if !m.reach.isEmpty { reachability }
             recentActivity
         }
@@ -70,11 +70,11 @@ struct StatusView: View {
                 Button("Set Up Rules…") { (NSApp.delegate as? AppDelegate)?.showSettingsTab("Location") }
             }
             // Every open issue, so "Allowed" never hides one; the details are in the sections below.
-            if m.leaking {
-                Label(m.leakHeadline, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+            ForEach(m.connectionIssues, id: \.self) {
+                Label($0, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(Tone.warning.textColor)
             }
             ForEach(m.consistency, id: \.kind) { w in
-                Label(w.title, systemImage: w.kind.symbol).font(.callout).foregroundStyle(.orange).help(w.detail)
+                Label(w.title, systemImage: w.kind.symbol).font(.callout).foregroundStyle(Tone.warning.textColor).help(w.detail)
             }
             if let checked = m.geo.checkedAt {
                 TimelineView(.periodic(from: .now, by: 15)) { _ in
@@ -84,7 +84,7 @@ struct StatusView: View {
             }
             if m.geo.confirmed == false {
                 Text("Waiting for a second check to confirm this before acting on it.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Tone.warning.textColor)
             }
         }
         .frame(maxWidth: .infinity)
@@ -99,7 +99,7 @@ struct StatusView: View {
                 Text(m.site.host ?? "No ruled site")
                 if let browser = m.site.browser { Text(browser) }
             }
-            Text(m.site.message).foregroundStyle(m.site.state == .mismatch ? .red : .secondary)
+            Text(m.site.message).foregroundStyle(m.site.state == .mismatch ? Tone.error.textColor : .secondary)
             if let rule = m.site.rule {
                 Text("Rule: \(rule.domain) → \(rule.requirement)").font(.caption).foregroundStyle(.tertiary)
             }
@@ -127,10 +127,9 @@ struct StatusView: View {
 
     private var leakChecks: some View {
         Section("Leak checks") {
-            if m.leak.ipv6.state != .off {
-                leakRow("IPv6 exit", tone: m.leak.ipv6.state.tone, label: m.leak.ipv6.state.label,
-                        message: m.leak.ipv6.message, isLeak: m.leak.ipv6.state == .leak,
-                        details: m.leak.ipv6.ip.map { [[$0, m.leak.ipv6.isp].compactMap { $0 }.joined(separator: " · ")] } ?? [])
+            ForEach([("IPv6 exit", m.leak.ipv6), ("UDP exit", m.leak.udp)].filter { $0.1.state != .off }, id: \.0) { title, check in
+                leakRow(title, tone: check.state.tone, label: check.state.label, message: check.message, isLeak: check.state == .leak,
+                        details: check.ip.map { [[$0, check.isp].compactMap { $0 }.joined(separator: " · ")] } ?? [])
             }
             if m.leak.dns.state != .off {
                 leakRow("DNS resolvers", tone: m.leak.dns.state.tone, label: m.leak.dns.state.label,
@@ -149,7 +148,7 @@ struct StatusView: View {
                 Spacer()
                 StatusBadge(tone: tone, text: label)
             }
-            Text(message).font(.callout).foregroundStyle(isLeak ? .red : .secondary)
+            Text(message).font(.callout).foregroundStyle(isLeak ? Tone.error.textColor : .secondary)
             ForEach(details, id: \.self) { Text($0).font(.caption).foregroundStyle(.tertiary).textSelection(.enabled) }
         }
     }
@@ -244,13 +243,13 @@ extension SiteState {
     }
 }
 
-extension Ipv6State {
+extension ExitState {
     var tone: Tone {
         switch self {
         case .leak: .error
         case .ok, .none: .success
         case .checking: .loading
-        case .unknown: .warning
+        case .unknown, .differs: .warning
         case .off: .neutral
         }
     }
@@ -259,8 +258,9 @@ extension Ipv6State {
         switch self {
         case .off: "Off"
         case .checking: "Checking…"
-        case .none: "No IPv6"
+        case .none: "None"
         case .ok: "No leak"
+        case .differs: "Other address"
         case .leak: "Leak"
         case .unknown: "Unknown"
         }

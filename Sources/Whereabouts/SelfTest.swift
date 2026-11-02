@@ -96,6 +96,22 @@ func selfTest() {
     check(isLoopbackAddress("127.0.2.2") && isLoopbackAddress("::1") && !isLoopbackAddress("10.0.0.1"), "loopback resolvers are local proxies")
     check(networkKey("198.51.100.7") == networkKey("198.51.100.240") && networkKey("198.51.100.7") != networkKey("198.51.101.7"), "IPv4 lookups share a /24")
     check(networkKey("2001:db8:12:1::a") == networkKey("2001:db8:12:ff::b") && networkKey("2001:db8:12::1") != networkKey("2001:db8:13::1"), "IPv6 lookups share a /48")
+    check(asNumber("AS56655 Gigahost AS") == 56655 && asNumber("Gigahost") == nil, "AS number from ip-api")
+    let viaApi = Location(isp: "Tunnel Provider AB", asn: 64500), viaWho = Location(isp: "Tunnel Hosting", asn: 64500)
+    check(sameNetwork(viaApi, viaWho), "one AS number is one network, whatever its names")
+    check(!sameNetwork(viaApi, Location(isp: "Tunnel Provider AB", asn: 64501)), "another AS number is another network")
+    check(sameNetwork(Location(isp: "Tunnel Provider AB"), Location(isp: "Tunnel Provider")), "without AS numbers, names decide")
+    // STUN: 203.0.113.42 port 54321, XOR'd with the magic cookie as a server sends it.
+    let tid: [UInt8] = Array(1...12)
+    let stunHead: [UInt8] = [0x01, 0x01, 0x00, 0x0C, 0x21, 0x12, 0xA4, 0x42] + tid
+    let xorMapped: [UInt8] = [0x00, 0x20, 0x00, 0x08, 0x00, 0x01, 0xF5, 0x23, 0xEA, 0x12, 0xD5, 0x68]
+    check(stunRequest(tid).count == 20 && stunRequest(tid).prefix(2) == Data([0x00, 0x01]), "STUN binding request")
+    check(stunMappedAddress(Data(stunHead + xorMapped), transaction: tid) == "203.0.113.42", "STUN XOR-MAPPED-ADDRESS")
+    check(stunMappedAddress(Data(stunHead + xorMapped), transaction: Array(repeating: 0, count: 12)) == nil, "STUN answer to another request")
+    let mapped: [UInt8] = [0x00, 0x01, 0x00, 0x08, 0x00, 0x01, 0xD4, 0x31, 198, 51, 100, 9]
+    check(stunMappedAddress(Data([0x01, 0x01, 0x00, 0x0C, 0x21, 0x12, 0xA4, 0x42] + tid + mapped), transaction: tid) == "198.51.100.9", "STUN MAPPED-ADDRESS fallback")
+    check(stunMappedAddress(Data([0x01, 0x01, 0x00, 0x18, 0x21, 0x12, 0xA4, 0x42] + tid + mapped + xorMapped), transaction: tid) == "203.0.113.42", "STUN prefers the XOR'd address")
+    check(stunMappedAddress(Data(stunHead + xorMapped.prefix(9)), transaction: tid) == nil, "STUN truncated attribute")
     let scutil = """
     DNS configuration
 
