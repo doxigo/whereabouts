@@ -249,7 +249,7 @@ final class Monitor {
 
     func checkForUpdate() async {
         guard settings.checkUpdates else { latestRelease = nil; return }
-        guard await fetchLatestRelease(), latestRelease != nil, settings.installUpdates else { return }
+        guard await fetchLatestRelease(), latestRelease != nil, settings.installUpdates, canInstallUpdates else { return }
         // Never restart under the user's hands: wait until they're in another app.
         while NSApp.isActive { try? await Task.sleep(for: .seconds(60)) }
         if settings.checkUpdates && settings.installUpdates { await installUpdate() }
@@ -268,7 +268,7 @@ final class Monitor {
     /// with this copy still in place.
     @discardableResult
     func installUpdate() async -> Bool {
-        guard let release = latestRelease, !installingUpdate else { return false }
+        guard let release = latestRelease, !installingUpdate, canInstallUpdates else { return false }
         installingUpdate = true
         defer { installingUpdate = false }
         do {

@@ -418,11 +418,11 @@ func selfTest() {
     check(bare == #"{"checkedAt":1761217200,"kind":"offline","pid":42,"version":1}"#, "status file without a location: \(bare)")
 
     // Updates
-    let release: [String: Any] = ["tag_name": "v1.10.0", "html_url": "https://example.com/release", "assets": [
+    let release: [String: Any] = ["tag_name": "v1.10.0", "html_url": "https://github.com/doxigo/whereabouts/releases/tag/v1.10.0", "assets": [
         ["name": "notes.txt", "browser_download_url": "https://example.com/notes.txt"],
-        ["name": "Whereabouts-1.10.0.dmg", "browser_download_url": "https://example.com/app.dmg"],
+        ["name": "Whereabouts-1.10.0.dmg", "browser_download_url": "https://github.com/doxigo/whereabouts/releases/download/v1.10.0/app.dmg"],
     ]]
-    check(newerRelease(release, than: "1.9.2")?.dmg?.absoluteString == "https://example.com/app.dmg", "newer release picks the disk image")
+    check(newerRelease(release, than: "1.9.2")?.dmg?.lastPathComponent == "app.dmg", "newer release picks the disk image")
     check(newerRelease(release, than: "1.10.0") == nil, "same version isn't an update")
     check(newerRelease(["tag_name": "v2.0.0", "html_url": "https://example.com/r"], than: "1.0")?.dmg == nil, "release without a disk image")
 

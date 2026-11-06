@@ -9,6 +9,11 @@ if CommandLine.arguments.contains("--selftest") {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--update-selftest") {
+    Task { @MainActor in await updateIntegrationTest() }
+    dispatchMain()
+}
+
 // Chrome passes the calling extension's origin to a native messaging host.
 if CommandLine.arguments.dropFirst().first?.hasPrefix("chrome-extension://") == true {
     AlibiHost.serve()

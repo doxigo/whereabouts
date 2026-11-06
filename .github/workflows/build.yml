@@ -20,3 +20,5 @@ jobs:
       - run: ./build.sh
       - name: Self-test
         run: build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
+      - name: Update trust tests
+        run: build/Whereabouts.app/Contents/MacOS/Whereabouts --update-selftest

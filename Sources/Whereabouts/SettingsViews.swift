@@ -636,7 +636,11 @@ struct AboutSettings: View {
                     Text("Install updates automatically")
                     Text("Download the new version and restart with it, once you've switched to another app.")
                 }
-                .disabled(!m.settings.checkUpdates)
+                .disabled(!m.settings.checkUpdates || !canInstallUpdates)
+                if !canInstallUpdates {
+                    Text("This build is signed ad hoc. Updates require a manual download because there is no publisher identity to verify.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -662,7 +666,7 @@ struct AboutSettings: View {
             HStack {
                 Button("Release Notes") { NSWorkspace.shared.open(release.page) }
                 // If it can't install in place, the release page has the disk image.
-                Button("Install and Restart") {
+                Button(canInstallUpdates ? "Install and Restart" : "Download Update") {
                     Task { if !(await m.installUpdate()) { NSWorkspace.shared.open(release.page) } }
                 }
             }

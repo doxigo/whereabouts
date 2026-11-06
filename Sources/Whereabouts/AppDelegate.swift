@@ -214,10 +214,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             menu.addItem(disabled: "Installing Update…")
         } else if let release = m.latestRelease {
             // If it can't install in place, the release page has the disk image.
-            let item = action("Update to \(release.version)", "arrow.down.circle") {
+            let item = action("\(canInstallUpdates ? "Update to" : "Download") \(release.version)", "arrow.down.circle") {
                 Task { if !(await m.installUpdate()) { NSWorkspace.shared.open(release.page) } }
             }
-            let detail = "Installs the new version and restarts Whereabouts"
+            let detail = canInstallUpdates ? "Installs the new version and restarts Whereabouts" : "Opens the release page for manual installation"
             if #available(macOS 14.4, *) { item.subtitle = detail } else { item.toolTip = detail }
             menu.addItem(item)
         }

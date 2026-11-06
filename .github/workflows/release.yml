@@ -35,6 +35,8 @@ jobs:
 
       - name: Self-test
         run: build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
+      - name: Update trust tests
+        run: build/Whereabouts.app/Contents/MacOS/Whereabouts --update-selftest
 
       # A disk image is how a Mac app ships as one file: it opens to the app
       # beside an Applications shortcut to drag it onto.
