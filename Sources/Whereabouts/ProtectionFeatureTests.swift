@@ -98,6 +98,26 @@ import Foundation
     monitor.clearTimeline()
     check(monitor.timeline.isEmpty, "clearing the timeline removes recorded events")
 
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let first = HistoryEntry(ts: 200_000_000, ip: "192.0.2.1", countryCode: "NO", country: "Norway", city: "Sandefjord", isp: "Example", status: .safe)
+    var duplicate = first; duplicate.ts -= 1_000
+    var changed = duplicate; changed.ts -= 1_000; changed.ip = "192.0.2.2"
+    let grouped = activityGroups([first, duplicate, changed], calendar: calendar)
+    check(grouped.count == 2 && grouped[0].entries.count == 2, "activity groups only consecutive identical connection details")
+    check(grouped.flatMap(\.entries).map(\.id) == [first, duplicate, changed].map(\.id), "activity grouping preserves every entry and its order")
+    for field in ["status", "provider", "day", "vpn"] {
+        var different = duplicate
+        switch field {
+        case "status": different.status = .unknown
+        case "provider": different.isp = "Another provider"
+        case "day": different.ts -= 86_400_000
+        default: different.isVpn = true
+        }
+        check(activityGroups([first, different], calendar: calendar).count == 2, "activity preserves changes in \(field)")
+    }
+    check(activityGroups([], calendar: calendar).isEmpty, "empty activity has no groups")
+
     let leaks = Monitor(settings: AppSettings(), history: [], testing: true)
     var probes = 0
     leaks.leakProbe = { baseline in

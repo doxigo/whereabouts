@@ -45,6 +45,12 @@ enum Demo {
         }
         var list = [entry(4, "PT", "Portugal", "Lisbon", .safe), entry(52, "US", "United States", "Ashburn", .violation),
                     entry(95, "NL", "Netherlands", "Amsterdam", .safe), entry(310, "DE", "Germany", "Frankfurt", .safe)]
+        if scenario == "activity" {
+            list.insert(entry(8, "PT", "Portugal", "Lisbon", .safe), at: 1)
+            list.insert(entry(12, "PT", "Portugal", "Lisbon", .unknown), at: 2)
+            list.append(entry(1_500, "GB", "United Kingdom", "Newcastle upon Tyne", .safe))
+            list[list.count - 1].isp = "A deliberately long international telecommunications provider name"
+        }
         if blocked { list.insert(entry(1, "US", "United States", "Ashburn", .violation), at: 0) }
         return list
     }

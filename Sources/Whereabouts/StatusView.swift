@@ -2,7 +2,6 @@ import SwiftUI
 
 struct StatusView: View {
     @Environment(Monitor.self) private var m
-    @State private var showAllHistory = false
 
     var body: some View {
         Form {
@@ -12,7 +11,7 @@ struct StatusView: View {
             location
             if m.leak.ipv6.state != .off || m.leak.udp.state != .off || m.leak.dns.state != .off { leakChecks }
             if !m.reach.isEmpty { reachability }
-            recentActivity
+            RecentActivity()
         }
         .formStyle(.grouped)
         .toolbar {
@@ -169,35 +168,6 @@ struct StatusView: View {
         }
     }
 
-    private var recentActivity: some View {
-        Section {
-            if m.history.isEmpty {
-                Text("Location changes will appear here.").foregroundStyle(.secondary)
-            }
-            ForEach(m.history.prefix(showAllHistory ? m.history.count : 10)) { entry in
-                HStack(spacing: 10) {
-                    Text(Countries.flag(entry.countryCode)).font(.title3)
-                    VStack(alignment: .leading) {
-                        let country = entry.country ?? Countries.name(entry.countryCode) ?? "Unknown"
-                        Text(entry.city.map { "\($0), \(country)" } ?? country)
-                        Text([entry.date.formatted(date: .numeric, time: .standard), entry.isp].compactMap { $0 }.joined(separator: " · "))
-                            .font(.caption).foregroundStyle(.tertiary)
-                    }
-                    Spacer()
-                    StatusBadge(tone: entry.status.tone, text: entry.status.label)
-                }
-            }
-            if m.history.count > 10 {
-                Button(showAllHistory ? "Show Less" : "Show All \(m.history.count)") { showAllHistory.toggle() }.buttonStyle(.link)
-            }
-        } header: {
-            HStack {
-                Text("Recent activity")
-                Spacer()
-                if !m.history.isEmpty { Button("Clear") { m.clearHistory() }.buttonStyle(.link) }
-            }
-        }
-    }
 }
 
 // MARK: - Labels & tones
