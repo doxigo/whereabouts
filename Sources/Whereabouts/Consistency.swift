@@ -102,7 +102,7 @@ extension Monitor {
         let mac = MacFacts(timeZone: systemTimeZone, automaticZone: TimeZoneHelper.automaticIsOn,
                            region: Locale.autoupdatingCurrent.region?.identifier,
                            computerName: computerName, ownerWords: ComputerName.ownerWords)
-        return consistencyWarnings(location: loc, onVpn: geo.vpnName != nil || loc?.isVpn == true, mac: mac,
+        return consistencyWarnings(location: loc, onVpn: followsConnectionZone(location: loc, vpnName: geo.vpnName), mac: mac,
                                    settings: settings, matchFailing: timeZoneError != nil, alibiPlace: alibiPlace)
     }
 

@@ -154,7 +154,7 @@ extension Monitor {
         let location = geo.kind == .safe || geo.kind == .violation ? geo.location : nil
         // On a VPN, follow the exit. Off it, IP geolocation is only approximate,
         // so the real answer is home.
-        let onVpn = geo.vpnName != nil || location?.isVpn == true
+        let onVpn = followsConnectionZone(location: location, vpnName: geo.vpnName)
         let wish = alibiPlace
         syncRegion(wish: wish, location: location, onVpn: onVpn)
         guard let home = settings.homeTimeZone, !TimeZoneHelper.automaticIsOn else { AlibiHost.publishSystem(nil); return }
@@ -217,6 +217,10 @@ extension Monitor {
 /// Alibi's place, for the Mac to follow: only while matching is on and asked to follow Alibi too.
 func followedPlace(_ wish: AlibiWish?, _ s: AppSettings) -> AlibiWish? {
     s.matchTimeZone && s.followAlibi ? wish : nil
+}
+
+func followsConnectionZone(location: Location?, vpnName: String?) -> Bool {
+    vpnName != nil || (location != nil && location?.isVpn != false)
 }
 
 /// Where the Mac's clock should be. A place Alibi has you in for all sites comes first; otherwise,

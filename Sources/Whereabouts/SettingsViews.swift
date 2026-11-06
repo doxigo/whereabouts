@@ -161,7 +161,7 @@ struct TimeZoneSettings: View {
         Section {
             Toggle(isOn: Binding(get: { m.settings.matchTimeZone }, set: { v in Task { await m.setMatchTimeZone(v) } })) {
                 Text("Match my Mac's time zone and region to my connection")
-                Text("While a VPN is up, the Mac uses the exit's time zone and region; otherwise your home ones. The menu bar clock keeps your home time.")
+                Text("Uses your IP location's time zone and region, including when VPN detection is unavailable. A confirmed non-VPN connection uses your home settings. The menu bar clock keeps your home time.")
             }
             // Fighting Location Services would flip the zone back and forth.
             .disabled(automaticZone && !m.settings.matchTimeZone)

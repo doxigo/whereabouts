@@ -152,7 +152,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             check("DNS", disabled: m.leak.dns.state == .off, m.leak.dns.state.label, m.leak.dns.state.tone),
             check("IPv6", disabled: m.leak.ipv6.state == .off, m.leak.ipv6.state.label, m.leak.ipv6.state.tone),
             check("UDP", disabled: m.leak.udp.state == .off, m.leak.udp.state.label, m.leak.udp.state.tone),
-            ("Time zone", zoneName(m.systemTimeZone), warnings.contains { $0.kind == .timeZone || $0.kind == .automaticZone } ? .warning : nil),
+            ("IP time zone", loc?.timeZone.map(zoneName), nil),
+            ("Mac time zone", zoneName(m.systemTimeZone), warnings.contains { $0.kind == .timeZone || $0.kind == .automaticZone } ? .warning : nil),
         ]
         return rows.compactMap { row in row.1.map { MenuHeader.Row(label: row.0, value: $0, tone: row.2) } }
     }

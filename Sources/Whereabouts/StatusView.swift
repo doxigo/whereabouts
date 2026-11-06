@@ -121,6 +121,7 @@ struct StatusView: View {
                 .help(loc?.isVpn == true && m.geo.vpnName == nil
                       ? "No VPN app or tunnel is running on this Mac, so it's likely on your router or network, where Whereabouts can't see its name." : "")
             // Live: Match time zone changes it, and NSSystemTimeZoneDidChange refreshes it.
+            LabeledContent("IP time zone", value: loc?.timeZone.map(zoneName) ?? "Unknown")
             LabeledContent("Mac time zone", value: zoneName(m.systemTimeZone))
         }
         .textSelection(.enabled)

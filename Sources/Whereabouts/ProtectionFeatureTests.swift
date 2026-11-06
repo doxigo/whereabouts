@@ -4,6 +4,13 @@ import Foundation
     let defaults = (try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))) ?? AppSettings()
     check(!defaults.strictProtection && !defaults.protectionTimeline && !defaults.connectionProfilesEnabled, "new protection features default off for existing settings")
     let exit = Location(ip: "192.0.2.1", countryCode: "NO", city: "Sandefjord", asn: 64500, timeZone: "Europe/Oslo")
+    let follow = followsConnectionZone(location: exit, vpnName: nil)
+    check(follow && timeZoneTarget(wish: nil, exitZone: exit.timeZone, onVpn: follow, connectionKnown: true, home: "Asia/Tehran") == "Europe/Oslo",
+          "an unknown VPN flag never restores Tehran over an Oslo exit")
+    check(!followsConnectionZone(location: nil, vpnName: nil), "an absent location is not a VPN verdict")
+    check(!followsConnectionZone(location: Location(isVpn: false), vpnName: nil), "an explicitly direct connection can restore home")
+    check(followsConnectionZone(location: Location(isVpn: false), vpnName: "Tunnel"), "local VPN evidence overrides a provider flag")
+
     let profile = ConnectionProfile(name: "Norway", locations: [SiteLocation(countryCode: "NO", country: "Norway", city: "Sandefjord")], asns: [64500])
     var settings = AppSettings()
     settings.connectionProfiles = [profile]
