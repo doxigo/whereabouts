@@ -32,7 +32,7 @@ The screenshots use made-up data from the app's demo mode (`--demo`). `Branding/
 - **Kill switch.** Cuts internet traffic on a country or ISP violation, or on a per-site rule that asks for it. If you unblock by hand, you get two minutes to reconnect your VPN: if the location still isn't allowed then, it blocks again. It re-arms sooner once every check is clear. With **Confirm before blocking** on, a second lookup provider cross-checks each violation. If the two disagree, the kill switch waits for the next check to agree.
 - **Hold the network during sleep.** Apps reconnect the moment the Mac wakes, often before the VPN does, and that first connection goes out over your own ISP. With this on (Settings › Protection, off by default, needs the kill switch), Whereabouts blocks traffic as the Mac goes to sleep and lifts the block once the first check after waking finds your location allowed. While it holds, only your VPN and Whereabouts' own lookups get through. See [the details](#holding-the-network-during-sleep).
 - **Computer name.** The router and every device on the network you join can see your Mac's name, VPN or not, and macOS names it after you by default (Alice's MacBook Pro). Whereabouts warns while the name includes yours, and Settings › Protection renames the Mac (and its `.local` name) after asking for your admin password once.
-- **Time zone, region and home clock.** Optionally moves the Mac to the VPN exit's time zone and region, so nothing on the Mac contradicts the IP, and back home when the VPN drops. With **Follow Alibi's location** on too (off by default, and not recommended), a place in Alibi for all sites (Tokyo, say) moves the Mac to that place's time zone and region instead, so the Mac no longer matches your IP address; Off and Match my IP address in Alibi leave it to the connection. The menu-bar clock keeps showing your home time either way. No app can remove the macOS clock, so a setting shrinks it to its small analog face instead.
+- **Time zone, region and home clock.** Optionally moves the Mac to the IP exit's time zone and region, including when VPN detection is unavailable. A positively identified non-VPN connection restores the home settings; an unknown VPN flag does not. With **Follow Alibi's location** on too (off by default, and not recommended), a place in Alibi for all sites (Tokyo, say) moves the Mac to that place's time zone and region instead, so the Mac no longer matches your IP address; Off and Match my IP address in Alibi leave it to the connection. The menu-bar clock keeps showing your home time either way. No app can remove the macOS clock, so a setting shrinks it to its small analog face instead.
 - **Apps on home time.** Some apps should keep your own hours wherever the Mac is, like a chat app or a calendar. Add them in Settings › Time Zone and Whereabouts opens them with your home time zone in `TZ`, as `open --env TZ=<zone>` would. One that starts on another zone (from the Dock, a login item or its own updater) is quit and opened again on home time. Apple's own apps hide their environment, so one of those that's already running when Whereabouts starts is caught the next time it opens.
 - **History.** Past lookups are kept, so you can see where this Mac has been seen.
 - **Alibi follows along.** With [Alibi](https://github.com/doxigo/alibi) on **Match my IP address**, Whereabouts tells it the moment the exit changes, so the browser's time zone, language and location move with your VPN without waiting for Alibi's own once-a-minute check.
@@ -73,10 +73,12 @@ It loads block rules into the macOS packet filter (`pf`), in the anchor `com.app
 When the Mac is about to sleep, the helper loads a second set of rules into the same anchor. It works like the kill switch block, with three exceptions:
 
 - Traffic inside a VPN tunnel (`utun0` to `utun31`, `ipsec0` to `ipsec3`, `ppp0` to `ppp3`) passes. What goes into a tunnel still leaves through Wi-Fi or Ethernet, where only the next two pass.
-- The addresses `ip-api.com` and `ipwho.is` resolve to pass, so the app can check where you are. So does DNS (port 53 only) to the Mac's DNS servers, when they're public ones like `1.1.1.1`, so it can look those names up. DNS servers on your local network pass anyway.
+- The addresses `api.ipify.org`, `ipv4.icanhazip.com`, `ipwho.is` and `ipapi.co` resolve to pass, so the app can check where you are. So does DNS (port 53 only) to the Mac's DNS servers, when they're public ones like `1.1.1.1`, so it can look those names up. DNS servers on your local network pass anyway.
 - While a tunnel carries your connection, the public addresses the Mac reaches straight from Wi-Fi or Ethernet pass too. With every app inside the tunnel, those are the VPN's own server, plus anything that skips the VPN anyway. This lets the VPN reconnect.
 
 After waking, the first check that finds your location allowed lifts the block. A check that finds it not allowed turns the hold into a normal kill switch block. **Unblock Network** lifts it by hand as usual.
+
+The app prepares these addresses in the background before sleep. The sleep handler only loads the prepared rules. If no addresses are ready, it still holds the network; reconnecting may then need a manual unblock. A response started before a network change or sleep cannot lift the hold.
 
 Some setups can't get through a hold, so you'd unblock by hand after waking:
 
@@ -85,11 +87,25 @@ Some setups can't get through a hold, so you'd unblock by hand after waking:
 
 A VPN running on your router needs none of this: the Mac has nothing to reconnect, and the check goes out straight away.
 
-The hold needs version 2 of the helper, which adds the `hold` subcommand to the sudoers rule. A helper set up by an older version shows **Setup needed** in Settings › Protection and asks for the admin password once more.
+The current app uses version 3 of the helper for sleep holds and strict verification. An older helper shows **Setup needed** in Settings > Protection and asks for the admin password once more.
 
 ### Where lookups go
 
-Location lookups go to [ip-api.com](https://ip-api.com) on its free HTTP tier, the one provider that flags VPN and proxy exits, with [ipwho.is](https://ipwho.is) as a fallback. The IPv6 exit is read from `api6.ipify.org` or `ipv6.icanhazip.com`, then from the dual-stack `api64.ipify.org` or `icanhazip.com`, which a proxy on the way may reach over IPv6 even when the Mac has none. The UDP exit comes from the STUN servers `stun.l.google.com` and `stun.cloudflare.com`, the ones WebRTC pages often ask. With **Check for updates** on (Settings › About), it asks `api.github.com` once a day for the latest release; with **Install updates automatically** also on, it downloads that release's disk image from GitHub and restarts with it.
+Every location request uses HTTPS, including redirects. Each check reads the current IPv4 exit from `api.ipify.org`, with `ipv4.icanhazip.com` as a fallback. [ipwho.is](https://ipwho.is) geolocates that exact address, with [ipapi.co](https://ipapi.co) as an independent fallback. Location metadata is cached for that address for up to an hour to stay within the free providers' quotas; a new exit is looked up immediately. Disputed violations force a fresh metadata lookup on the next check. VPN names still come from macOS; the providers' free tiers do not supply VPN/proxy flags, so that field stays unknown.
+
+The IPv6 exit is read from `api6.ipify.org` or `ipv6.icanhazip.com`, then from the dual-stack `api64.ipify.org` or `icanhazip.com`, which a proxy on the way may reach over IPv6 even when the Mac has none. The UDP exit comes from the STUN servers `stun.l.google.com` and `stun.cloudflare.com`. Failed probes show **Unknown**, since an unanswered probe cannot establish that a leak is impossible. These diagnostics run separately from the location-check schedule.
+
+With **Check for updates** on (Settings › About), the app asks `api.github.com` once a day for the latest release. Automatic installation requires an update that satisfies the running app's signing requirement and uses the same signing certificate. Ad-hoc builds have no publisher identity to verify, so they offer a manual download instead. Certificate changes also require a manual installation.
+
+### Optional protection settings
+
+All three features start disabled:
+
+- **Protection > Strict protection mode** requires the kill switch. It restricts internet traffic when the app starts, after detected route changes, across sleep/wake, and while location checks are unavailable or unconfirmed. Unlike the sleep hold, its rules do not pass all tunnel traffic. HTTPS to verification endpoints, DNS to configured resolvers, local networks and known VPN peers remain reachable. An allowed check releases the restriction; a confirmed violation fully blocks the internet. **Unblock Now** provides the usual two-minute recovery window. Disabling strict mode removes its verification hold, but does not disable the normal kill switch.
+- **Protection > Record protection timeline** keeps the latest 500 route, check, rule and firewall events in `protection-timeline.json`. Events can contain IP addresses and checked domains. View or clear them in the same section. Turning recording off retains existing events and stops adding new ones.
+- **Location > Enable connection profiles** applies one selected named profile in addition to existing country, provider and site rules. Each profile requires an allowed country/city and an exact ASN match. Missing required city or ASN data is Unknown, not Allowed. Profiles remain saved when disabled.
+
+Strict mode works while Whereabouts runs and reacts to observed route changes; it is not a boot-time network extension. Unknown VPN endpoints or encrypted DNS configurations can prevent verification through the restriction, requiring **Unblock Now**. Quitting normally or rebooting releases the firewall. Local networks and the listed exceptions remain accessible, so it is not per-application network isolation.
 
 ## Reading the menu-bar glyph
 
@@ -154,6 +170,24 @@ The app has a built-in self-test for its rule logic (XCTest isn't part of Comman
 ```bash
 build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
 ```
+
+This also covers protection transitions with fake lookups and firewall commands: restart, re-arm, failed commands, overlapping requests, stale responses, and sleep/wake holds. It does not change the live firewall or put the Mac to sleep.
+
+To exercise update authentication and installation against disposable copies:
+
+```bash
+build/Whereabouts.app/Contents/MacOS/Whereabouts --update-selftest
+```
+
+With a certificate-signed build, this creates and mounts a local disk image, verifies its signing identity, replaces a temporary app, and checks that an ad-hoc replacement is rejected without changing the installed fixture. An ad-hoc build tests rejection only, since automatic installation is unavailable. Neither mode replaces the app in Applications.
+
+`--network-selftest` runs one real location and leak-check cycle and prints timing, CPU time and peak memory, without IP addresses, saved settings, notifications or firewall changes. It requires an internet connection and is deliberately excluded from CI. It measures a check cycle, not battery drain or packet-filter enforcement.
+
+`--firewall-selftest` requests administrator access and briefly interrupts internet traffic. It uses the production helper in a temporary PF anchor, checks working HTTPS and UDP DNS baselines against a full block and verification exceptions, then releases its own rules and PF token. An independent 40-second watchdog also releases them if the test stops. Existing PF connections are flushed, as they are during normal enforcement. IPv6 and application proxies need separate tests. Add `--dry-run` to print the script without running it.
+
+`--sleep-selftest` requests administrator access, schedules one wake 40 seconds ahead and puts the Mac to sleep. Existing scheduled events are preserved. Inspect the protection timeline for the wake and a fresh location result afterward. This checks recovery with the current protection settings; it does not enable a disabled kill switch. Add `--dry-run` to inspect the script.
+
+For an unplugged runtime sample, use `python3 Scripts/measure-runtime.py --pid <main-app-pid> --seconds 600 --output build/runtime-check/measurement.json`. It records app CPU, terminated-child CPU, wakeups, memory and whole-Mac battery readings. Other apps and the independent browser messaging host are outside the app CPU measurement; battery drain cannot be attributed to Whereabouts alone.
 
 The [Build workflow](.github/workflows/build.yml) runs `./build.sh` and the self-test on a macOS 26 runner for every push to main and every pull request, so a break shows up before a release.
 
