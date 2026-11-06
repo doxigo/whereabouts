@@ -46,14 +46,14 @@ enum Privileged {
     }
 
     /// Runs a script once under a single admin-password prompt.
-    static func run(_ script: String, prompt: String) async throws {
+    @discardableResult static func run(_ script: String, prompt: String) async throws -> String {
         let path = NSTemporaryDirectory() + "whereabouts-setup-\(UUID().uuidString).sh"
         try script.write(toFile: path, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path)
         defer { try? FileManager.default.removeItem(atPath: path) }
         func osa(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
         let source = "do shell script \(osa("/bin/bash " + q(path))) with prompt \(osa(prompt)) with administrator privileges"
-        _ = try await Whereabouts.run("/usr/bin/osascript", ["-e", source], timeout: 60)
+        return try await Whereabouts.run("/usr/bin/osascript", ["-e", source], timeout: 60)
     }
 
     static func isUserCanceled(_ error: Error) -> Bool {

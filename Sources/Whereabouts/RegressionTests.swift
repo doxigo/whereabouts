@@ -162,3 +162,32 @@ import Foundation
     check(start.duration(to: .now) < .milliseconds(700), "a slow browser helper leaves the main actor responsive")
     check(await script.value == "done", "the asynchronous browser helper completes")
 }
+
+@MainActor func networkSmokeTest() async {
+    let monitor = Monitor(settings: AppSettings(), history: [], testing: true)
+    let start = Date()
+    let geo = await monitor.checkGeo()
+    let lookupSeconds = Date().timeIntervalSince(start)
+    monitor.geo.vpnName = await activeVpnName()
+    await monitor.checkLeaks()
+    var usage = rusage(), children = rusage()
+    getrusage(RUSAGE_SELF, &usage)
+    getrusage(RUSAGE_CHILDREN, &children)
+    func seconds(_ t: timeval) -> Double { Double(t.tv_sec) + Double(t.tv_usec) / 1e6 }
+    let cpu = seconds(usage.ru_utime) + seconds(usage.ru_stime) + seconds(children.ru_utime) + seconds(children.ru_stime)
+    let result: [String: Any] = [
+        "location": geo.kind.rawValue,
+        "ipv6": monitor.leak.ipv6.state.label,
+        "udp": monitor.leak.udp.state.label,
+        "dns": monitor.leak.dns.state.label,
+        "lookup_seconds": lookupSeconds,
+        "total_seconds": Date().timeIntervalSince(start),
+        "cpu_seconds_including_helpers": cpu,
+        "peak_rss_mib": Double(usage.ru_maxrss) / 1_048_576,
+        "persistent_or_privileged_changes": false,
+    ]
+    if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
+        print(String(decoding: data, as: UTF8.self))
+    }
+    exit(geo.location != nil ? 0 : 1)
+}

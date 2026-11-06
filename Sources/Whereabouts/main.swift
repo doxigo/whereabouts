@@ -14,6 +14,21 @@ if CommandLine.arguments.contains("--update-selftest") {
     dispatchMain()
 }
 
+if CommandLine.arguments.contains("--network-selftest") {
+    Task { @MainActor in await networkSmokeTest() }
+    dispatchMain()
+}
+
+if CommandLine.arguments.contains("--firewall-selftest") {
+    Task { @MainActor in await liveFirewallTest() }
+    dispatchMain()
+}
+
+if CommandLine.arguments.contains("--sleep-selftest") {
+    Task { @MainActor in await liveSleepTest() }
+    dispatchMain()
+}
+
 // Chrome passes the calling extension's origin to a native messaging host.
 if CommandLine.arguments.dropFirst().first?.hasPrefix("chrome-extension://") == true {
     AlibiHost.serve()

@@ -1,6 +1,8 @@
 import Foundation
 
 @MainActor func protectionFeatureTests(_ check: (Bool, String) -> Void) async {
+    check(runtimeReportFailed("PASS: baseline\rFAIL: engage\n"), "live test failures survive AppleScript carriage-return output")
+    check(!runtimeReportFailed("PASS: blocked\nSKIP: no baseline"), "live test skips are separate from failures")
     let defaults = (try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))) ?? AppSettings()
     check(!defaults.strictProtection && !defaults.protectionTimeline && !defaults.connectionProfilesEnabled, "new protection features default off for existing settings")
     let exit = Location(ip: "192.0.2.1", countryCode: "NO", city: "Sandefjord", asn: 64500, timeZone: "Europe/Oslo")
