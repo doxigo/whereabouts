@@ -22,7 +22,8 @@ private let browsers: [String: BrowserKind] = [
 
 /// Matches the rule's domain exactly or as a parent domain.
 func matchRule(_ host: String, _ rules: [SiteRule]) -> SiteRule? {
-    rules.first { host == $0.domain || host.hasSuffix("." + $0.domain) }
+    rules.filter { host == $0.domain || host.hasSuffix("." + $0.domain) }
+        .max { $0.domain.count < $1.domain.count }
 }
 
 func locationSatisfies(_ location: Location, _ rule: SiteRule) -> Bool {
@@ -37,25 +38,10 @@ func isAutomationDenied(_ error: Error) -> Bool {
     return ["-1743", "Not authorized", "not allowed", "assistive access"].contains { text.contains($0) }
 }
 
-private struct ScriptError: LocalizedError { let errorDescription: String? }
-
-/// Compiled once per source: launching osascript for each 5 s poll cost ~40 ms of CPU.
-@MainActor private var compiledScripts: [String: NSAppleScript] = [:]
-
-/// Runs AppleScript in-process. NSAppleScript is main-thread only, so the timeout
-/// caps how long a hung browser can hold up the app.
-@MainActor func runAppleScript(_ source: String, timeout: Int = 2) throws -> String {
+func runAppleScript(_ source: String, timeout: Int = 2) async throws -> String {
     let source = "with timeout of \(timeout) seconds\n\(source)\nend timeout"
-    guard let script = compiledScripts[source] ?? NSAppleScript(source: source) else {
-        throw ScriptError(errorDescription: "Couldn't load the script.")
-    }
-    compiledScripts[source] = script
-    var error: NSDictionary?
-    let result = script.executeAndReturnError(&error)
-    if let error {
-        throw ScriptError(errorDescription: "\(error[NSAppleScript.errorMessage] ?? "AppleScript error") (\(error[NSAppleScript.errorNumber] ?? "?"))")
-    }
-    return result.stringValue ?? ""
+    return try await run("/usr/bin/osascript", ["-e", source], timeout: Double(timeout + 1))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 extension Monitor {
@@ -63,6 +49,7 @@ extension Monitor {
         guard !siteInFlight else { return }
         siteInFlight = true
         defer { siteInFlight = false }
+        let generation = pathChanges, rules = settings.siteRules, watching = settings.browserWatch
 
         var next: SiteWatchStatus
         if !settings.browserWatch {
@@ -74,6 +61,7 @@ extension Monitor {
         } else {
             next = await evaluateActiveTab()
         }
+        guard generation == pathChanges, rules == settings.siteRules, watching == settings.browserWatch else { return }
 
         // A tab we can't read is "unknown", not a recovery.
         let trigger: TriggerState = switch next.state {
@@ -82,7 +70,18 @@ extension Monitor {
         default: .clear
         }
         reportTriggerState("site", trigger)
-        if next != site { site = next }
+        if next != site {
+            site = next
+            if next.rule != nil { recordProtection("Site rule", next.message) }
+        }
+        if next.state == .mismatch {
+            let key = "\(next.rule?.domain ?? "")|\(next.message)"
+            if key != siteAlertKey {
+                siteAlertKey = key
+                notify("Wrong location for this site", next.message, sound: true)
+            }
+        } else if next.state == .match || next.state == .disabled { siteAlertKey = nil }
+        await reconcileProtection()
     }
 
     private func evaluateActiveTab() async -> SiteWatchStatus {
@@ -120,7 +119,7 @@ extension Monitor {
 
         let url: String
         do {
-            url = try runAppleScript(script).trimmingCharacters(in: .whitespacesAndNewlines)
+            url = try await runAppleScript(script)
         } catch {
             if isAutomationDenied(error) {
                 return unreadable(SiteWatchStatus(state: .blocked, browser: name,
@@ -130,7 +129,10 @@ extension Monitor {
                 return unreadable(SiteWatchStatus(state: .unsupported, browser: name, message: "\(name)'s active tab URL can't be read for location checks."))
             }
             log.error("Couldn't read the active tab in \(name): \(error.localizedDescription)")
-            return unreadable(SiteWatchStatus(state: .idle, browser: name, message: "Couldn't read the active tab in \(name)."))
+            return unreadable(SiteWatchStatus(state: .unsupported, browser: name, message: "Couldn't read the active tab in \(name)."))
+        }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+            return SiteWatchStatus(state: .idle, message: "The active application changed during the check.")
         }
 
         guard url.contains("://"), let host = normalizeDomain(url) else {
@@ -154,15 +156,6 @@ extension Monitor {
         }
         let status = SiteWatchStatus(state: .mismatch, browser: name, host: host, rule: rule,
                                      message: "\(host) should be accessed from \(rule.requirement), but your IP is in \(loc.cityPlace).")
-        // Once per distinct situation (site + location), so staying on the page
-        // doesn't re-alert — or re-engage the kill switch right after an unblock.
-        let key = "\(rule.domain)|\(loc.countryCode ?? "?")|\((loc.city ?? "").lowercased())"
-        if key != siteAlertKey {
-            siteAlertKey = key
-            notify("Wrong location for this site", status.message, sound: true)
-            // The global setting is required too — a per-rule flag alone must never cut the network.
-            if rule.killSwitch && settings.killSwitch { Task { await activateKillSwitch(status.message) } }
-        }
         return status
     }
 }

@@ -50,6 +50,23 @@ struct SiteLocation: Codable, Hashable {
     var label: String { city.map { "\($0), \(country)" } ?? country }
 }
 
+struct PendingSiteLocation {
+    var country: String?
+    var city = ""
+
+    func appending(to locations: [SiteLocation]) -> [SiteLocation] {
+        guard let country else { return locations }
+        let city = city.trimmingCharacters(in: .whitespaces)
+        return locations + [SiteLocation(countryCode: country, country: Countries.name(country) ?? country,
+                                         city: city.isEmpty ? nil : city)]
+    }
+
+    mutating func add(to locations: inout [SiteLocation]) {
+        locations = appending(to: locations)
+        self = PendingSiteLocation()
+    }
+}
+
 /// When the active browser tab is on `domain`, the IP must resolve to ANY of `locations`.
 struct SiteRule: Codable, Equatable, Identifiable {
     var domain: String
@@ -89,6 +106,11 @@ struct AppSettings: Codable, Equatable {
     var killSwitch = false
     /// While the Mac sleeps, block all but the VPN and the app's lookups, until a check after waking passes.
     var holdOnWake = false
+    var strictProtection = false
+    var protectionTimeline = false
+    var connectionProfilesEnabled = false
+    var connectionProfiles: [ConnectionProfile] = []
+    var activeProfileID: UUID?
     var ispMode = IspMode.off
     var expectedIsps: [String] = []
     var alertOnIspChange = false
@@ -121,7 +143,11 @@ struct AppSettings: Codable, Equatable {
     var shareStatus = true
 
     /// A country or provider rule. Without one, every location passes.
-    var hasLocationRules: Bool { !countries.isEmpty || (ispMode == .allowlist && !expectedIsps.isEmpty) }
+    var hasLocationRules: Bool { connectionProfilesEnabled || !countries.isEmpty || (ispMode == .allowlist && !expectedIsps.isEmpty) }
+
+    var activeProfile: ConnectionProfile? {
+        connectionProfilesEnabled ? connectionProfiles.first { $0.id == activeProfileID } : nil
+    }
 
     mutating func normalize() {
         countries = countries.map { $0.uppercased() }
@@ -130,6 +156,14 @@ struct AppSettings: Codable, Equatable {
         if let zone = homeTimeZone, TimeZone(identifier: zone) == nil { homeTimeZone = nil }
         var seenApp = Set<String>()
         homeTimeApps = homeTimeApps.filter { !$0.isEmpty && seenApp.insert($0).inserted }
+        var profileIDs = Set<UUID>()
+        connectionProfiles = connectionProfiles.filter { profileIDs.insert($0.id).inserted }.map { profile in
+            var profile = profile
+            profile.name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            profile.asns = Array(Set(profile.asns.filter { $0 > 0 && $0 <= Int(UInt32.max) })).sorted()
+            profile.locations = normalizedLocations(profile.locations)
+            return profile
+        }
 
         // Provider names match as loose fragments, so dedupe case-insensitively.
         var seenIsp = Set<String>()
@@ -140,16 +174,7 @@ struct AppSettings: Codable, Equatable {
 
         siteRules = siteRules.compactMap { rule in
             guard let domain = normalizeDomain(rule.domain) else { return nil }
-            var seen = Set<String>()
-            let locations = rule.locations.compactMap { l -> SiteLocation? in
-                let code = l.countryCode.trimmingCharacters(in: .whitespaces).uppercased()
-                guard code.count == 2, code.allSatisfy({ $0.isASCII && $0.isLetter }) else { return nil }
-                let city = l.city?.trimmingCharacters(in: .whitespaces)
-                let loc = SiteLocation(countryCode: code,
-                                       country: l.country.isEmpty ? code : l.country,
-                                       city: city?.isEmpty == false ? city : nil)
-                return seen.insert(loc.key).inserted ? loc : nil
-            }
+            let locations = normalizedLocations(rule.locations)
             guard !locations.isEmpty else { return nil }
             return SiteRule(domain: domain, locations: locations, edgeLine: rule.edgeLine, killSwitch: rule.killSwitch)
         }
@@ -173,6 +198,11 @@ extension AppSettings {
         launchAtLogin = c.get(.launchAtLogin, launchAtLogin)
         killSwitch = c.get(.killSwitch, killSwitch)
         holdOnWake = c.get(.holdOnWake, holdOnWake)
+        strictProtection = c.get(.strictProtection, strictProtection)
+        protectionTimeline = c.get(.protectionTimeline, protectionTimeline)
+        connectionProfilesEnabled = c.get(.connectionProfilesEnabled, connectionProfilesEnabled)
+        connectionProfiles = c.get(.connectionProfiles, connectionProfiles)
+        activeProfileID = c.get(.activeProfileID, activeProfileID)
         ispMode = c.get(.ispMode, ispMode)
         expectedIsps = c.get(.expectedIsps, expectedIsps)
         alertOnIspChange = c.get(.alertOnIspChange, alertOnIspChange)
@@ -326,6 +356,7 @@ struct KillSwitchStatus {
     var error: String?
     /// The block is a hold for sleep, which lets VPN tunnels through until a check after waking passes.
     var held = false
+    var verifying = false
     /// Manually unblocked: standing down until then (or until every monitor is clear),
     /// so the VPN can reconnect. At that time it blocks again if the location still isn't allowed.
     var reblockAt: Date?

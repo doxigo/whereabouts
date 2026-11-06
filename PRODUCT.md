@@ -24,7 +24,7 @@ It doesn't ask whether the VPN is connected; it asks where you appear to be and 
 
 - Lives in the menu bar (`LSUIElement`), no Dock icon. The app icon is seen in Finder and /Applications, Spotlight, System Settings (Login Items, Automation, Notifications), the About/Settings windows, and on every notification banner, which is the moment something has gone wrong.
 - The menu-bar item is a status glyph plus a place label. Glyph states today (SF Symbols): safe, violation, leak (orange), kill switch engaged, unknown, offline, checking. Template (monochrome) by default; colored when the "menu bar color" alert is on.
-- Lookups use ip-api.com (HTTP free tier, the one provider that flags VPN/proxy exits) plus fallbacks.
+- Lookups use HTTPS IP echoes and ipwho.is/ipapi.co metadata. VPN names come from macOS; unavailable provider flags remain unknown.
 
 ## Capabilities and Constraints
 

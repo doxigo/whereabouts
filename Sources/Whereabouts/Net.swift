@@ -22,7 +22,13 @@ func runSync(_ path: String, _ args: [String], timeout: TimeInterval) throws -> 
     process.standardError = err
     try process.run()
 
-    let killer = DispatchWorkItem { if process.isRunning { process.terminate() } }
+    let killer = DispatchWorkItem {
+        guard process.isRunning else { return }
+        process.terminate()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+    }
     DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
     // Drain stderr concurrently so a chatty command can't fill a pipe and stall.
     var errData = Data()
@@ -56,16 +62,24 @@ func run(_ path: String, _ args: [String], timeout: TimeInterval = 5) async thro
 
 struct HTTPError: Error { let status: Int }
 
+private final class HTTPSOnly: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(request.url?.scheme == "https" ? request : nil)
+    }
+}
+
 /// A fresh ephemeral session per request: a pooled keep-alive connection opened
 /// before a VPN switch would otherwise report the old exit.
 func fetchData(_ url: String, timeout: TimeInterval = 10) async throws -> Data {
+    guard let url = URL(string: url), url.scheme == "https" else { throw URLError(.secureConnectionFailed) }
     let config = URLSessionConfiguration.ephemeral
     config.timeoutIntervalForRequest = timeout
     config.timeoutIntervalForResource = timeout
     config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-    let session = URLSession(configuration: config)
+    let session = URLSession(configuration: config, delegate: HTTPSOnly(), delegateQueue: nil)
     defer { session.finishTasksAndInvalidate() }
-    var request = URLRequest(url: URL(string: url)!)
+    var request = URLRequest(url: url)
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     let (data, response) = try await session.data(for: request)
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -206,31 +220,80 @@ enum Provider { case ipApi, ipWho }
 
 private func string(_ d: [String: Any], _ key: String) -> String? { d[key] as? String }
 
-/// ip-api.com: the only free provider with proxy/hosting (VPN) flags. With an
-/// address it geolocates that address instead of this machine's exit.
+/// ipapi.co is an independent HTTPS fallback. Neither provider's free tier supplies VPN flags.
 func fetchIpApi(_ ip: String? = nil) async throws -> Location {
-    let path = ip?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
-    let d = try await fetchJSON("http://ip-api.com/json/\(path)?fields=status,message,query,country,countryCode,regionName,city,isp,as,proxy,hosting,timezone,lat,lon")
-    guard string(d, "status") == "success" else { throw HTTPError(status: -2) }
-    let proxy = d["proxy"] as? Bool, hosting = d["hosting"] as? Bool
-    return Location(ip: string(d, "query"), country: string(d, "country"),
-                    countryCode: string(d, "countryCode")?.uppercased(), region: string(d, "regionName"), city: string(d, "city"),
-                    isp: string(d, "isp"), asn: string(d, "as").flatMap(asNumber),
-                    isVpn: proxy == nil && hosting == nil ? nil : (proxy ?? false) || (hosting ?? false),
-                    timeZone: string(d, "timezone"), lat: d["lat"] as? Double, lon: d["lon"] as? Double)
+    let path = ip.map { $0 + "/" } ?? ""
+    if let ip, !isIPAddress(ip) { throw HTTPError(status: -2) }
+    return try parseIpApi(try await fetchJSON("https://ipapi.co/\(path)json/"))
+}
+
+func parseIpApi(_ d: [String: Any]) throws -> Location {
+    guard d["error"] as? Bool != true, let ip = string(d, "ip"), isIPAddress(ip),
+          let country = string(d, "country_code"), country.count == 2 else { throw HTTPError(status: -2) }
+    return Location(ip: ip, country: string(d, "country_name"), countryCode: country.uppercased(),
+                    region: string(d, "region"), city: string(d, "city"), isp: string(d, "org"),
+                    asn: string(d, "asn").flatMap(asNumber), timeZone: string(d, "timezone"),
+                    lat: d["latitude"] as? Double, lon: d["longitude"] as? Double)
 }
 
 /// ipwho.is over HTTPS — no VPN detection.
 func fetchIpWho(_ ip: String? = nil) async throws -> Location {
-    let path = ip?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
-    let d = try await fetchJSON("https://ipwho.is/\(path)")
-    guard d["success"] as? Bool != false else { throw HTTPError(status: -2) }
+    if let ip, !isIPAddress(ip) { throw HTTPError(status: -2) }
+    return try parseIpWho(try await fetchJSON("https://ipwho.is/\(ip ?? "")"))
+}
+
+func parseIpWho(_ d: [String: Any]) throws -> Location {
+    guard d["success"] as? Bool == true, let ip = string(d, "ip"), isIPAddress(ip),
+          let country = string(d, "country_code"), country.count == 2 else { throw HTTPError(status: -2) }
     let connection = d["connection"] as? [String: Any] ?? [:]
-    return Location(ip: string(d, "ip"), country: string(d, "country"),
-                    countryCode: string(d, "country_code")?.uppercased(), region: string(d, "region"), city: string(d, "city"),
+    return Location(ip: ip, country: string(d, "country"),
+                    countryCode: country.uppercased(), region: string(d, "region"), city: string(d, "city"),
                     isp: string(connection, "isp") ?? string(connection, "org"), asn: connection["asn"] as? Int, isVpn: nil,
                     timeZone: (d["timezone"] as? [String: Any]).flatMap { string($0, "id") },
                     lat: d["latitude"] as? Double, lon: d["longitude"] as? Double)
+}
+
+func isIPAddress(_ text: String) -> Bool { IPv4Address(text) != nil || IPv6Address(text) != nil }
+
+func lookupExit() async -> (Location, Provider)? {
+    // A fresh IP echo checks the route every time; cache only that exact IP's metadata.
+    for url in ["https://api.ipify.org", "https://ipv4.icanhazip.com"] {
+        guard let data = try? await fetchData(url, timeout: 5),
+              let ip = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              IPv4Address(ip) != nil else { continue }
+        return await exitMetadata(ip)
+    }
+    return nil
+}
+
+@MainActor private var exitCache: (at: Date, location: Location, source: Provider)?
+
+@MainActor func invalidateExitMetadata() { exitCache = nil }
+
+@MainActor private func exitMetadata(_ ip: String) async -> (Location, Provider)? {
+    if let hit = exitCache, hit.location.ip == ip, hit.at.timeIntervalSinceNow > -3600 { return (hit.location, hit.source) }
+    for source in [Provider.ipWho, .ipApi] {
+        guard let location = try? await (source == .ipWho ? fetchIpWho(ip) : fetchIpApi(ip)), location.ip == ip else { continue }
+        exitCache = (Date(), location, source)
+        return (location, source)
+    }
+    return nil
+}
+
+func confirmLocationViolation(_ primary: Location, source: Provider, reason: ViolationReason, settings: AppSettings) async -> Bool {
+    guard let ip = primary.ip,
+          let second = try? await (source == .ipApi ? fetchIpWho(ip) : fetchIpApi(ip)),
+          second.ip == ip, second.countryCode == primary.countryCode else { return false }
+    if reason == .isp {
+        guard let isp = second.isp else { return false }
+        return !ispMatches(isp, settings.expectedIsps)
+    }
+    if reason == .profile {
+        guard let profile = settings.activeProfile, second.asn == primary.asn,
+              second.city?.lowercased() == primary.city?.lowercased() else { return false }
+        return profileVerdict(second, profile).kind == .violation
+    }
+    return true
 }
 
 // ponytail: one entry per network ever looked up (a handful a day); prune if that ever matters.

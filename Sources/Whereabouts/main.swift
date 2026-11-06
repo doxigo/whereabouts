@@ -5,8 +5,8 @@ import AppKit
 unsetenv("TZ")
 
 if CommandLine.arguments.contains("--selftest") {
-    selfTest()
-    exit(0)
+    Task { @MainActor in await selfTest() }
+    dispatchMain()
 }
 
 if CommandLine.arguments.contains("--update-selftest") {

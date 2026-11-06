@@ -1,9 +1,11 @@
 import Foundation
 
 /// `Whereabouts --selftest`: asserts on the pure rule logic. No XCTest needed (it isn't in Command Line Tools).
-func selfTest() {
+@MainActor func selfTest() async {
     var failures = 0
+    var checks = 0
     func check(_ ok: Bool, _ what: String, line: Int = #line) {
+        checks += 1
         if !ok { failures += 1; print("FAIL line \(line): \(what)") }
     }
 
@@ -78,11 +80,11 @@ func selfTest() {
     check(matchRule("notbank.example", [rule]) == nil, "suffix without dot doesn't match")
     check(locationSatisfies(Location(countryCode: "XA", city: "home city"), rule), "city match is case-insensitive")
     check(!locationSatisfies(Location(countryCode: "XA", city: "Other City"), rule), "wrong city")
-    // The tab is read in-process; a denied Automation grant must still read as "permission needed".
-    MainActor.assumeIsolated {
-        check((try? runAppleScript("return \"ok\"")) == "ok", "AppleScript runs in-process")
+    // Browser scripts must not block the main actor.
+    do {
+        check((try? await runAppleScript("return \"ok\"")) == "ok", "AppleScript runs in a helper")
         do {
-            _ = try runAppleScript("error \"Not authorized to send Apple events to Browser.\" number -1743")
+            _ = try await runAppleScript("error \"Not authorized to send Apple events to Browser.\" number -1743")
             check(false, "AppleScript error throws")
         } catch {
             check(isAutomationDenied(error), "Automation denial is recognized: \(error.localizedDescription)")
@@ -142,7 +144,7 @@ func selfTest() {
 
     // Kill switch helper
     check(KillSwitch.setupScript(user: "alice").contains("alice ALL=(root) NOPASSWD: /Library/Application\\ Support/Whereabouts/killswitch-helper.sh engage"), "sudoers grant")
-    check(KillSwitch.helperScript.contains("# WHEREABOUTS_HELPER_VERSION=2\n") && KillSwitch.helperScript.contains("\nWA_RULES\n"), "helper script")
+    check(KillSwitch.helperScript.contains("# WHEREABOUTS_HELPER_VERSION=\(KillSwitch.helperVersion)\n") && KillSwitch.helperScript.contains("\nWA_RULES\n"), "helper script")
     check(KillSwitch.setupScript(user: "alice").contains("killswitch-helper.sh hold *"), "sudoers grant for the sleep hold")
     // The hold checks its own arguments before touching pf, so that runs unprivileged.
     let killPath = NSTemporaryDirectory() + "wa-selftest-kill.sh"
@@ -426,6 +428,9 @@ func selfTest() {
     check(newerRelease(release, than: "1.10.0") == nil, "same version isn't an update")
     check(newerRelease(["tag_name": "v2.0.0", "html_url": "https://example.com/r"], than: "1.0")?.dmg == nil, "release without a disk image")
 
-    print(failures == 0 ? "selftest: all passed" : "selftest: \(failures) failed")
+    await regressionTests { ok, message in check(ok, message) }
+    await protectionFeatureTests { ok, message in check(ok, message) }
+
+    print(failures == 0 ? "selftest: all \(checks) checks passed" : "selftest: \(failures) of \(checks) checks failed")
     exit(failures == 0 ? 0 : 1)
 }

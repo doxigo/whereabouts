@@ -17,6 +17,7 @@ final class Monitor {
     var leak = LeakStatus()
     var kill = KillSwitchStatus()
     private(set) var history: [HistoryEntry]
+    var timeline: [ProtectionEvent]
     private(set) var isCheckingAll = false
     /// A newer GitHub release than this build, if update checks are on.
     private(set) var latestRelease: Release?
@@ -30,7 +31,7 @@ final class Monitor {
     var computerName = ComputerName.current()
     var renameError: String?
     /// Alibi's All sites cover, as its host last heard it.
-    var alibiWish = AlibiHost.readWish()
+    var alibiWish: AlibiWish?
     /// The place the Mac's clock follows: Alibi's, with Match time zone and Follow Alibi's location on.
     var alibiPlace: AlibiWish? { followedPlace(alibiWish, settings) }
 
@@ -43,9 +44,12 @@ final class Monitor {
     // Loop bookkeeping — not UI state.
     @ObservationIgnored var geoInFlight = false
     @ObservationIgnored var geoRecheckQueued = false
+    @ObservationIgnored private var geoWaiters: [CheckedContinuation<GeoStatus, Never>] = []
     @ObservationIgnored var reachInFlight = false
     @ObservationIgnored var siteInFlight = false
     @ObservationIgnored var leakInFlight = false
+    @ObservationIgnored var leakRecheckQueued = false
+    @ObservationIgnored var leakProbe: ((Location?) async -> LeakStatus)?
     @ObservationIgnored var killInFlight = false
     @ObservationIgnored var timeZoneInFlight = false
     /// When each app on the home-time list was last quit to reopen it, by bundle ID.
@@ -60,12 +64,12 @@ final class Monitor {
     @ObservationIgnored private var prevIsp: String?
     @ObservationIgnored private var prevAsn: Int?
     @ObservationIgnored private var unknownStreak = 0
-    /// A violation the cross-check disputed: the kill switch waits one more check.
-    @ObservationIgnored private var killDeferred = false
+    @ObservationIgnored private var protection = ProtectionState()
     /// The browser whose tab couldn't be read, and that result, so the site watch doesn't ask again right away.
     @ObservationIgnored var unreadableTab: (pid: pid_t, at: Date, status: SiteWatchStatus)?
     @ObservationIgnored private var vpnLookup: (interfaces: [String], name: String?)?
-    @ObservationIgnored private var checkCount = 0
+    @ObservationIgnored private var lastLeakCheck: ContinuousClock.Instant?
+    @ObservationIgnored private var diagnosticsTask: Task<Void, Never>?
     @ObservationIgnored private var checkTask: Task<Void, Never>?
     @ObservationIgnored private var siteTask: Task<Void, Never>?
     @ObservationIgnored private var wakeTask: Task<Void, Never>?
@@ -78,13 +82,40 @@ final class Monitor {
     @ObservationIgnored private var pathSatisfied = true
     @ObservationIgnored private var pathSeen = false
     /// Bumped on each network change or wake, so a check that straddles one isn't published as current.
-    @ObservationIgnored private var pathChanges = 0
+    @ObservationIgnored private(set) var pathChanges = 0
+    @ObservationIgnored var lookup: () async -> (Location, Provider)? = lookupExit
+    @ObservationIgnored var firewall: (String) async throws -> String = { try await KillSwitch.sudoHelper($0) }
+    @ObservationIgnored var holdFirewall: ([String]) throws -> Void = { addresses in
+        _ = try runSync("/usr/bin/sudo", ["-n", KillSwitch.helperPath, "hold"] + addresses, timeout: 5)
+    }
+    @ObservationIgnored var verificationFirewall: ([String]) async throws -> Void = { addresses in
+        _ = try await run("/usr/bin/sudo", ["-n", KillSwitch.helperPath, "verify"] + addresses, timeout: 5)
+    }
+    @ObservationIgnored var strictSleepFirewall: ([String]) throws -> Void = { addresses in
+        _ = try runSync("/usr/bin/sudo", ["-n", KillSwitch.helperPath, "verify"] + addresses, timeout: 5)
+    }
+    @ObservationIgnored var verificationTask: Task<Void, Never>?
+    @ObservationIgnored var verificationGeneration: Int?
+    @ObservationIgnored var verificationAddresses: (Bool) async -> [String] = { dnsOnly in
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: dnsOnly ? KillSwitch.dnsAddresses() : KillSwitch.holdAddresses(strict: true))
+            }
+        }
+    }
+    @ObservationIgnored var confirm: (Location, Provider, ViolationReason, AppSettings) async -> Bool = confirmLocationViolation
+    @ObservationIgnored let testing: Bool
+    @ObservationIgnored var preparedHoldAddresses: [String] = []
+    @ObservationIgnored private var holdPreparationTask: Task<Void, Never>?
 
-    init() {
-        settings = Demo.enabled ? Demo.settings : Store.loadSettings()
-        history = Demo.enabled ? Demo.history : Store.loadHistory()
+    init(settings: AppSettings? = nil, history: [HistoryEntry]? = nil, testing: Bool = false) {
+        self.testing = testing
+        self.settings = settings ?? (Demo.enabled ? Demo.settings : Store.loadSettings())
+        self.history = history ?? (Demo.enabled ? Demo.history : Store.loadHistory())
+        timeline = testing || Demo.enabled ? [] : Store.loadTimeline()
+        alibiWish = testing || Demo.enabled ? nil : AlibiHost.readWish()
         // Restore the last outcome so a relaunch doesn't look like a country change.
-        if let last = history.first {
+        if let last = self.history.first {
             prevKind = GeoKind(rawValue: last.status.rawValue)
             prevCode = last.countryCode
             prevIsp = last.isp
@@ -98,16 +129,21 @@ final class Monitor {
         watchAlibiWish()
         syncLoginItem()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        Task { await refreshKillSwitchState() }
-        startChecks()
+        Task {
+            await refreshKillSwitchState()
+            recordProtection("Connection", "Monitoring started.")
+            await reconcileProtection()
+            startChecks()
+        }
         siteTask = loop(every: 5) { await $0.checkSite() }
         startNetworkWatch()
+        prepareSleepHold()
         _ = loop(every: 86_400, delay: 30) { await $0.checkForUpdate() }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.holdForSleep() }
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.markChecking(); self?.recheckConnectivity() }
+            MainActor.assumeIsolated { self?.markChecking("Mac woke from sleep."); self?.recheckConnectivity() }
         }
         NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshSystemTimeZone() }
@@ -141,15 +177,27 @@ final class Monitor {
         guard next != old else { return }
         settings = next
         if Demo.enabled { return }
+        let rulesChanged = old.ruleMode != next.ruleMode || old.countries != next.countries
+            || old.ispMode != next.ispMode || old.expectedIsps != next.expectedIsps || old.confirmViolations != next.confirmViolations
+            || old.connectionProfilesEnabled != next.connectionProfilesEnabled || old.activeProfile != next.activeProfile
+        if old.protectionTimeline != next.protectionTimeline { recordProtection("Recording", "Protection timeline enabled.") }
+        if rulesChanged { markChecking("Location rules changed.") }
+        if testing { return }
         Store.save(next)
+        if old.strictProtection != next.strictProtection {
+            recordProtection("Settings", "Strict protection \(next.strictProtection ? "enabled" : "disabled").")
+            Task {
+                await reconcileStrictSetting()
+                await checkGeo()
+            }
+        }
 
         // Re-run only what the change affects — every geo check is a provider call.
         // A new interval restarts the timer, which runs every check at once.
         let interval = old.intervalMs != next.intervalMs
         if old.launchAtLogin != next.launchAtLogin { syncLoginItem() }
         if interval { startChecks() }
-        if !interval && (old.ruleMode != next.ruleMode || old.countries != next.countries
-            || old.ispMode != next.ispMode || old.expectedIsps != next.expectedIsps) {
+        if !interval && rulesChanged {
             Task { await checkGeo() }
         }
         if old.domains != next.domains {
@@ -160,8 +208,10 @@ final class Monitor {
             if !interval { Task { await checkReach() } }
         }
         if old.browserWatch != next.browserWatch || old.siteRules != next.siteRules {
+            site = SiteWatchStatus()
             Task { await checkSite() }
         }
+        if old.holdOnWake != next.holdOnWake || old.killSwitch != next.killSwitch || old.strictProtection != next.strictProtection { prepareSleepHold() }
         if !interval && (old.ipv6Check != next.ipv6Check || old.udpCheck != next.udpCheck || old.dnsCheck != next.dnsCheck) { Task { await checkLeaks() } }
         if next.matchTimeZone && (!old.matchTimeZone || old.homeTimeZone != next.homeTimeZone || old.homeRegion != next.homeRegion
             || old.followAlibi != next.followAlibi) {
@@ -297,23 +347,35 @@ final class Monitor {
 
     private var intervalSeconds: Double { Double(settings.intervalMs) / 1000 }
 
-    /// One timer for every network check, so the radio wakes once per interval instead of once per check.
     private func startChecks() {
         checkTask?.cancel()
-        checkCount = 0
-        checkTask = loop(every: intervalSeconds) { await $0.runChecks() }
+        checkTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let start = ContinuousClock.now
+                await runChecks()
+                let elapsed = start.duration(to: .now)
+                let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+                do { try await Task.sleep(for: .seconds(max(1, nextCheckDelay(interval: intervalSeconds, elapsed: seconds)))) }
+                catch { return }
+            }
+        }
     }
 
     private func runChecks() async {
         refreshComputerName()
         // The leak checks compare against the IPv4 exit, so refresh that first.
         _ = await checkGeo()
-        // Leak checks at most once a minute, whatever the interval.
-        let leaksDue = checkCount % max(1, Int((60 / intervalSeconds).rounded(.up))) == 0
-        checkCount += 1
-        async let r: Void = checkReach()
-        if leaksDue { await checkLeaks() }
-        await r
+        prepareSleepHold()
+        guard !Task.isCancelled, diagnosticsTask == nil else { return }
+        let leaksDue = lastLeakCheck.map { $0.duration(to: .now) >= .seconds(60) } ?? true
+        if leaksDue { lastLeakCheck = .now }
+        diagnosticsTask = Task {
+            defer { diagnosticsTask = nil }
+            async let r: Void = checkReach()
+            if leaksDue { await checkLeaks() }
+            await r
+        }
     }
 
     func checkAll() async {
@@ -353,13 +415,39 @@ final class Monitor {
 
     /// The last answer may belong to the old route: status.json says "checking" until the
     /// re-check lands, so no reader acts on a stale "safe" after the VPN drops.
-    private func markChecking() {
+    func markChecking(_ reason: String = "Network route changed.") {
         pathChanges += 1
-        publishStatus(GeoStatus(checkedAt: Date()))
+        protection.invalidate()
+        vpnLookup = nil
+        geo = GeoStatus(checkedAt: Date())
+        site = SiteWatchStatus(state: settings.browserWatch ? .noLocation : .disabled)
+        leak = LeakStatus()
+        preparedHoldAddresses = []
+        publishStatus(geo)
+        recordProtection("Connection", reason)
+        if !testing {
+            prepareSleepHold()
+            if settings.strictProtection { Task { await reconcileProtection() } }
+        }
+    }
+
+    func prepareSleepHold() {
+        guard !testing, !Demo.enabled, settings.killSwitch, settings.holdOnWake || settings.strictProtection, !kill.active,
+              holdPreparationTask == nil else { return }
+        let generation = pathChanges
+        let strict = settings.strictProtection
+        holdPreparationTask = Task {
+            let addresses = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async { continuation.resume(returning: KillSwitch.holdAddresses(strict: strict)) }
+            }
+            holdPreparationTask = nil
+            if generation == pathChanges && strict == settings.strictProtection { preparedHoldAddresses = addresses }
+            else { prepareSleepHold() }
+        }
     }
 
     private func publishStatus(_ status: GeoStatus) {
-        if settings.shareStatus { StatusFile.publish(status) }
+        if !testing && settings.shareStatus { StatusFile.publish(status) }
     }
 
     /// After wake or a network change the link takes a moment, so retry with backoff
@@ -386,7 +474,7 @@ final class Monitor {
 
     /// A new alert on the same `topic` (the title by default) replaces the old one in Notification Center.
     func notify(_ title: String, _ body: String, sound: Bool = false, topic: String? = nil) {
-        if Demo.enabled || pausedUntil != nil { return }
+        if testing || Demo.enabled || pausedUntil != nil { return }
         if sound && settings.alerts.sound { NSSound.beep() }
         guard settings.alerts.notifications else { return }
         let content = UNMutableNotificationContent()
@@ -400,32 +488,62 @@ final class Monitor {
     /// One location check: evaluate, record history, alert, maybe engage the kill switch.
     @discardableResult
     func checkGeo() async -> GeoStatus {
-        if geoInFlight { geoRecheckQueued = true; return geo }
+        if settings.strictProtection && geo.kind != .safe { await reconcileProtection() }
+        await verificationTask?.value
+        if geoInFlight {
+            geoRecheckQueued = true
+            return await withCheckedContinuation { geoWaiters.append($0) }
+        }
         geoInFlight = true
         let pathAtStart = pathChanges
         defer {
             geoInFlight = false
-            if geoRecheckQueued { geoRecheckQueued = false; Task { await checkGeo() } }
+            if geoRecheckQueued {
+                geoRecheckQueued = false
+                let waiters = geoWaiters
+                geoWaiters = []
+                Task {
+                    let result = await checkGeo()
+                    waiters.forEach { $0.resume(returning: result) }
+                }
+            }
         }
 
         var status: GeoStatus
-        if let (location, source) = await lookupLocation() {
+        if let (location, source) = await lookup() {
+            guard pathChanges == pathAtStart, !Task.isCancelled else { return geo }
             let verdict = evaluateLocation(location, settings)
             // Naming the VPN takes a process or two, and the answer only changes with the interfaces.
             let interfaces = ipv4InterfaceNames()
-            if vpnLookup?.interfaces != interfaces { vpnLookup = (interfaces, await activeVpnName()) }
+            if !testing && vpnLookup?.interfaces != interfaces {
+                let name = await activeVpnName()
+                guard pathChanges == pathAtStart, !Task.isCancelled else { return geo }
+                vpnLookup = (interfaces, name)
+            }
             let vpnName = vpnLookup?.name
             // A single bad provider response must not be able to cut the network.
             var confirmed: Bool?
             if verdict.kind == .violation, let reason = verdict.reason, settings.confirmViolations {
-                confirmed = await confirmViolation(location, source: source, reason: reason)
+                confirmed = await confirm(location, source, reason, settings)
+            }
+            guard pathChanges == pathAtStart, !Task.isCancelled else { return geo }
+            let identity = [location.ip, location.cityPlace, location.asn.map { "AS\($0)" }, location.isp].compactMap { $0 }.joined(separator: " | ")
+            let provider = source == .ipWho ? "ipwho.is" : "ipapi.co"
+            recordProtection("Location check", "\(provider) metadata: \(identity). \(verdict.message)",
+                             location: TimelineLocation(place: location.cityPlace, ip: location.ip, asn: location.asn,
+                                                        isp: location.isp, source: provider, message: verdict.message))
+            if let confirmed {
+                recordProtection("Confirmation", "Independent provider \(confirmed ? "confirmed" : "did not confirm") this violation for \(location.ip ?? "unknown IP").")
             }
             status = GeoStatus(kind: verdict.kind, location: location, checkedAt: Date(),
-                               message: confirmed == false ? verdict.message + " Not confirmed — the second provider disagrees." : verdict.message,
+                               message: confirmed == false ? verdict.message + " The second provider did not confirm this result." : verdict.message,
                                confirmed: confirmed, vpnName: vpnName)
         } else if kill.active {
+            guard pathChanges == pathAtStart, !Task.isCancelled else { return geo }
             // Our own block stops every lookup, so this failure says nothing new: keep
             // the last answer (and its check time) instead of calling the block "offline".
+            recordProtection("Location check", "Location services did not answer while the firewall was active.")
+            if kill.verifying { verificationGeneration = nil }
             if geo.location == nil {
                 geo = GeoStatus(kind: .unknown, message: kill.held ? "Can't check your location yet after sleep. The network stays blocked until a check finds it allowed."
                                 : "Can't check your location while the network is blocked.")
@@ -439,11 +557,14 @@ final class Monitor {
             status = GeoStatus(kind: offline ? .offline : .unknown, checkedAt: Date(),
                                message: offline ? "No internet connection." : "Unable to check your location (provider unavailable).")
         }
+        guard pathChanges == pathAtStart, !Task.isCancelled else { return geo }
+        if status.location == nil { recordProtection("Location check", status.message) }
+        if status.confirmed == false && !testing { invalidateExitMetadata() }
+        protection.accept(&status)
+        if status.confirmed == true, let location = status.location { status.message = evaluateLocation(location, settings).message }
         geo = status
-        if let location = status.location { AlibiHost.publish(location) }
-        // Every outcome, so readers can judge freshness. If the network changed mid-check this answer
-        // may be the old route's, and a re-check is already on its way: keep saying "checking".
-        publishStatus(pathChanges == pathAtStart ? status : GeoStatus(checkedAt: Date()))
+        if !testing, let location = status.location { AlibiHost.publish(location) }
+        publishStatus(status)
 
         let code = status.location?.countryCode
         let isp = status.location?.isp
@@ -468,65 +589,40 @@ final class Monitor {
                                      isVpn: status.location?.isVpn, status: HistoryStatus(rawValue: status.kind.rawValue) ?? .unknown)
             history.insert(entry, at: 0)
             if history.count > Store.maxHistory { history.removeLast(history.count - Store.maxHistory) }
-            Store.save(history)
+            if !testing { Store.save(history) }
         }
 
         // Only a real "safe" is clear — offline is exactly what an engaged block looks like.
         reportTriggerState("geo", status.kind == .violation ? .violating : status.kind == .safe ? .clear : .unknown)
         fireGeoAlerts(status, becameViolation: becameViolation, recovered: recovered, ispChangedTo: ispChangedTo)
-        if kill.held && status.kind == .safe { await releaseHold() }
-        rereadAlibiWish()
-        if settings.matchTimeZone { Task { await syncTimeZone() } }
         prevKind = status.kind
         prevCode = code
         if let isp { prevIsp = isp; prevAsn = asn }
+        await reconcileProtection()
+        guard pathChanges == pathAtStart else { return geo }
+        if !testing {
+            rereadAlibiWish()
+            if settings.matchTimeZone { Task { await syncTimeZone() } }
+        }
         return status
     }
 
-    private func lookupLocation() async -> (Location, Provider)? {
-        if let l = try? await fetchIpApi() { return (l, .ipApi) }
-        if let l = try? await fetchIpWho() { return (l, .ipWho) }
-        // Both can fail on the same blip; one more shot beats flashing "unknown".
-        if let l = try? await fetchIpApi() { return (l, .ipApi) }
-        return nil
-    }
-
-    /// Country agreement settles a country violation; a provider violation also needs
-    /// the other provider to report a non-matching ISP.
-    private func confirmViolation(_ primary: Location, source: Provider, reason: ViolationReason) async -> Bool {
-        guard let second = try? await (source == .ipApi ? fetchIpWho() : fetchIpApi()),
-              second.countryCode == primary.countryCode else { return false }
-        if reason == .isp {
-            guard let isp = second.isp else { return false }
-            return !ispMatches(isp, settings.expectedIsps)
+    func reconcileProtection() async {
+        switch ProtectionState.action(settings: settings, geo: geo, site: site, kill: kill, paused: pausedUntil != nil) {
+        case .none: break
+        case .block(let reason): await activateKillSwitch(reason)
+        case .releaseHold: await releaseHold()
+        case .verify: await engageVerificationHold()
         }
-        return true
     }
 
     private func fireGeoAlerts(_ status: GeoStatus, becameViolation: Bool, recovered: Bool, ispChangedTo: String?) {
-        if status.kind != .violation { killDeferred = false }
-
         if becameViolation {
             notify("Location not allowed", status.message, sound: true, topic: "geo")
         } else if recovered {
             notify("Location allowed again", status.message, topic: "geo")
         } else if let isp = ispChangedTo {
             notify("Provider changed", "You're now connected through \(isp).")
-        }
-
-        guard settings.killSwitch, status.kind == .violation else { return }
-        if killDeferred {
-            // Two checks in a row agree — as good as a second provider.
-            killDeferred = false
-            Task { await activateKillSwitch(status.message) }
-        } else if becameViolation || kill.held {
-            // Held for sleep, a violation that was already showing counts too: the hold lets tunnels through.
-            if status.confirmed == false {
-                killDeferred = true
-                log.warning("Violation unconfirmed by the cross-check — holding the kill switch")
-            } else {
-                Task { await activateKillSwitch(status.message) }
-            }
         }
     }
 
@@ -566,7 +662,7 @@ final class Monitor {
 
 // MARK: - Rule evaluation (pure)
 
-enum ViolationReason { case country, isp }
+enum ViolationReason { case country, isp, profile }
 
 struct Verdict {
     var kind: GeoKind
@@ -595,6 +691,12 @@ func evaluateLocation(_ location: Location, _ settings: AppSettings) -> Verdict 
     if settings.ispMode == .allowlist, !settings.expectedIsps.isEmpty, let isp = location.isp,
        !ispMatches(isp, settings.expectedIsps) {
         return Verdict(kind: .violation, message: "Unexpected provider: \(isp) in \(place) isn't one you expect.", reason: .isp)
+    }
+    if settings.connectionProfilesEnabled {
+        guard let profile = settings.activeProfile else {
+            return Verdict(kind: .unknown, message: "Choose an active connection profile in Location settings.")
+        }
+        return profileVerdict(location, profile)
     }
     return Verdict(kind: .safe, message: settings.countries.isEmpty ? "Your IP is in \(place). No countries are set yet."
                    : blocklist ? "Your IP is in \(place) — not blocked."

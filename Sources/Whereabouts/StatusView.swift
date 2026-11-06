@@ -114,6 +114,7 @@ struct StatusView: View {
             LabeledContent("Country", value: loc.map { "\(Countries.flag($0.countryCode)) \($0.country ?? "—")" } ?? "—")
             LabeledContent("City", value: loc?.city ?? "—")
             LabeledContent("ISP", value: loc?.isp ?? "—")
+            LabeledContent("Network ASN", value: loc?.asn.map { "AS\($0)" } ?? "Unknown")
             // The provider only says "looks like a proxy"; the name comes from the machine. IP databases
             // know who registered the address, not the VPN brand, so a VPN on the router stays unnamed.
             LabeledContent("VPN / Proxy", value: m.geo.vpnName.map { "\(flag) · \($0)" } ?? flag)

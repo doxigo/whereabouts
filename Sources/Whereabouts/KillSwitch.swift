@@ -25,7 +25,7 @@ func reblockReason(_ geo: GeoStatus, _ site: SiteWatchStatus) -> String? {
 }
 
 enum KillSwitch {
-    static let helperVersion = 2
+    static let helperVersion = 3
     static let helperPath = "\(Privileged.appDir)/killswitch-helper.sh"
     static let tokenFile = "\(Privileged.appDir)/killswitch-pf.token"
     static let sudoersPath = "/etc/sudoers.d/whereabouts-killswitch"
@@ -65,7 +65,8 @@ enum KillSwitch {
       # A hold for sleep also lets through VPN tunnels and the addresses it was given.
       [ -n "${HOLD_RULES:-}" ] && printf '%s\n' "$HOLD_RULES"
       # Everything else - the internet, including any VPN tunnel outside a hold - is dropped.
-      echo 'block drop quick all'
+      if [ "${mode:-}" = verify ]; then echo 'block drop quick all label "whereabouts-verify"'
+      else echo 'block drop quick all'; fi
     }
 
     load_rules() {
@@ -74,8 +75,8 @@ enum KillSwitch {
         echo "whereabouts: /etc/pf.conf has no com.apple anchor point" >&2
         exit 5
       fi
-      if ! emit_rules | $PFCTL -a "$ANCHOR" -f - 2>/dev/null; then
-        echo "whereabouts: failed to load pf block rules" >&2
+      if ! RULE_ERROR=$(emit_rules | $PFCTL -a "$ANCHOR" -f - 2>&1); then
+        echo "whereabouts: failed to load pf block rules: $RULE_ERROR" >&2
         exit 3
       fi
       # pf enable is reference counted; hold exactly one token so other pf
@@ -101,22 +102,29 @@ enum KillSwitch {
       engage)
         load_rules
         ;;
-      hold)
+      hold|verify)
         # The Mac is going to sleep: block, but let a VPN reconnect and the app check where
         # it is. Tunnels pass whole (what goes in still leaves through the physical interface,
         # where only the given addresses pass). "flags any" keeps a flow alive after the flush.
         # "dns:<address>" passes only DNS to it, so the app's lookups can resolve.
+        mode="$1"
         shift
         [ $# -le 64 ] || { echo "whereabouts: too many addresses" >&2; exit 2; }
-        HOLD_RULES="pass quick on { $(echo utun{0..31} ipsec{0..3} ppp{0..3}) } all flags any"
+        HOLD_RULES=""
+        if [ "$mode" = hold ]; then
+          HOLD_RULES="pass quick on { $(echo utun{0..31} ipsec{0..3} ppp{0..3}) } all flags any"
+        fi
         for arg in "$@"; do
           addr="${arg#dns:}"
+          addr="${addr#vpn:}"
           if [[ "$addr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then family=inet
           elif [[ "$addr" =~ ^[0-9A-Fa-f:]{2,39}$ && "$addr" == *:* ]]; then family=inet6
           else echo "whereabouts: invalid address" >&2; exit 2
           fi
-          if [ "$addr" != "$arg" ]; then
+          if [[ "$arg" == dns:* ]]; then
             HOLD_RULES+=$'\n'"pass quick $family proto udp from any to $addr port 53"$'\n'"pass quick $family proto tcp from any to $addr port 53 flags any"
+          elif [ "$mode" = verify ] && [[ "$arg" != vpn:* ]]; then
+            HOLD_RULES+=$'\n'"pass quick $family proto tcp from any to $addr port 443 flags any"
           else
             HOLD_RULES+=$'\n'"pass quick $family from any to $addr flags any"$'\n'"pass quick $family from $addr to any flags any"
           fi
@@ -134,14 +142,17 @@ enum KillSwitch {
         echo inactive
         ;;
       status)
-        if $PFCTL -a "$ANCHOR" -s rules 2>/dev/null | grep -qF "block drop quick"; then
+        RULES=$($PFCTL -a "$ANCHOR" -s rules 2>/dev/null)
+        if echo "$RULES" | grep -qF "whereabouts-verify"; then
+          echo verifying
+        elif echo "$RULES" | grep -qF "block drop quick"; then
           echo active
         else
           echo inactive
         fi
         ;;
       *)
-        echo "Usage: $0 {engage|hold [address...]|release|status}" >&2
+        echo "Usage: $0 {engage|hold [address...]|verify [address...]|release|status}" >&2
         exit 1
         ;;
     esac
@@ -150,7 +161,7 @@ enum KillSwitch {
     static func setupScript(user: String) -> String {
         let helper = Privileged.sudoersPath(helperPath)
         return Privileged.installScript(helperPath: helperPath, helper: helperScript, sudoersPath: sudoersPath,
-                                        grants: ["engage", "hold *", "release", "status"].map { "\(user) ALL=(root) NOPASSWD: \(helper) \($0)" })
+                                        grants: ["engage", "hold", "hold *", "verify", "verify *", "release", "status"].map { "\(user) ALL=(root) NOPASSWD: \(helper) \($0)" })
     }
 
     static let teardownScript = """
@@ -175,18 +186,22 @@ enum KillSwitch {
 
     /// What a hold lets through: the location lookups, DNS to public resolvers (the local
     /// network's pass already), and, while a tunnel carries the connection, the VPN's server.
-    /// Blocking calls, made as the Mac goes to sleep.
-    static func holdAddresses() -> [String] {
-        let lookups = ["ip-api.com", "ipwho.is"].flatMap(resolveAddresses)
+    /// Blocking discovery, prepared off the main thread before sleep.
+    static func dnsAddresses() -> [String] {
         let resolvers = (try? runSync("/usr/sbin/scutil", ["--dns"], timeout: 3)).map(parseResolvers)?
-            .first { $0.scopedDomain == nil }?.nameservers.filter { !isPrivateAddress($0) && !isLoopbackAddress($0) } ?? []
-        let passed = lookups + resolvers.prefix(4).map { "dns:\($0)" }
+            .first { $0.scopedDomain == nil }?.nameservers.filter { isIPAddress($0) && !isLoopbackAddress($0) } ?? []
+        return Array(resolvers.prefix(4)).map { "dns:\($0)" }
+    }
+
+    static func holdAddresses(strict: Bool = false) -> [String] {
+        let lookups = ["api.ipify.org", "ipv4.icanhazip.com", "ipwho.is", "ipapi.co"].flatMap(resolveAddresses)
+        let passed = dnsAddresses() + lookups
         guard let probe = lookups.first(where: { !$0.contains(":") }),
               let route = try? runSync("/sbin/route", ["-n", "get", probe], timeout: 3),
               isTunnelInterface(route.firstMatch(of: /interface: (\S+)/).map { String($0.1) }) else { return passed }
         let netstat = ["inet", "inet6"].compactMap { try? runSync("/usr/sbin/netstat", ["-an", "-f", $0], timeout: 3) }.joined()
         let peers = directPeers(netstat, local: Set(physicalAddresses()))
-        return Array((passed + peers.filter { !lookups.contains($0) }).prefix(64))
+        return Array((passed + peers.filter { !lookups.contains($0) }.map { strict ? "vpn:\($0)" : $0 }).prefix(64))
     }
 }
 
@@ -245,6 +260,75 @@ private func numericHost(_ addr: UnsafePointer<sockaddr>) -> String? {
 }
 
 extension Monitor {
+    func cancelVerificationSetup() async {
+        verificationTask?.cancel()
+        while killInFlight { try? await Task.sleep(for: .milliseconds(50)) }
+    }
+
+    func reconcileStrictSetting() async {
+        if !settings.strictProtection {
+            await cancelVerificationSetup()
+            if kill.verifying && (geo.kind != .violation || geo.confirmed == false) { await releaseHold() }
+        }
+        await reconcileProtection()
+    }
+
+    func engageVerificationHold() async {
+        if let task = verificationTask { await task.value; return }
+        guard settings.killSwitch, settings.strictProtection, !kill.suppressed, pausedUntil == nil,
+              !killInFlight, !Demo.enabled, !kill.active || kill.held else { return }
+        if kill.verifying && verificationGeneration == pathChanges { return }
+        let generation = pathChanges
+        let task = Task { await configureVerificationHold(generation) }
+        verificationTask = task
+        await task.value
+        verificationTask = nil
+        if generation != pathChanges && settings.strictProtection { await reconcileProtection() }
+    }
+
+    private func configureVerificationHold(_ generation: Int) async {
+        do {
+            try await loadVerificationRules([])
+            kill.active = true
+            kill.held = true
+            kill.verifying = true
+            kill.reason = "Strict protection: waiting for an allowed location check."
+            kill.error = nil
+            killActivation += 1
+            recordProtection("Firewall", "Restricted internet while verifying the connection.")
+            for dnsOnly in [true, false] {
+                let addresses = await verificationAddresses(dnsOnly)
+                guard generation == pathChanges, settings.strictProtection, settings.killSwitch,
+                      kill.held, kill.verifying, !killInFlight, !kill.suppressed, pausedUntil == nil, !Task.isCancelled else { return }
+                try await loadVerificationRules(addresses)
+            }
+            verificationGeneration = generation
+            if !testing { verifyBlocked(killActivation) }
+        } catch {
+            guard settings.killSwitch, settings.strictProtection, !killInFlight, !kill.suppressed, !Task.isCancelled else { return }
+            // Older helpers can still fail closed, but need an upgrade to allow verification.
+            do {
+                killInFlight = true
+                defer { killInFlight = false }
+                _ = try await firewall("engage")
+                kill.active = true
+                kill.held = false
+                kill.verifying = false
+                kill.reason = "Strict protection blocked traffic because verification rules failed."
+                kill.error = "Verification could not be set up. Use Unblock Now, then Set Up Now to update the firewall helper."
+            } catch {
+                kill.error = "Strict protection could not block traffic. Set up the kill switch helper before relying on it."
+            }
+            recordProtection("Firewall error", kill.error ?? "Verification failed.")
+        }
+    }
+
+    private func loadVerificationRules(_ addresses: [String]) async throws {
+        killInFlight = true
+        defer { killInFlight = false }
+        try await verificationFirewall(addresses)
+    }
+
     /// A paused kill switch re-arms only once every reporting monitor is clear —
     /// i.e. you fixed it, not that the check failed while the network reconnects.
     func reportTriggerState(_ source: String, _ state: TriggerState) {
@@ -254,7 +338,12 @@ extension Monitor {
         log.info("Kill switch re-armed — every monitor is clear again")
     }
 
-    func rearmKillSwitch() { kill.reblockAt = nil }
+    func rearmKillSwitch() {
+        kill.reblockAt = nil
+        reblockTask?.cancel()
+        recordProtection("Firewall", "Protection re-armed.")
+        if !testing { Task { await checkAll(); await reconcileProtection() } }
+    }
 
     /// Seconds a manual unblock gives the VPN to reconnect before the kill switch blocks again.
     static let reblockDelay: Double = 120
@@ -267,6 +356,7 @@ extension Monitor {
         let status = await checkGeo()
         guard kill.suppressed else { return } // that check came back clear and re-armed it
         kill.reblockAt = nil
+        if settings.strictProtection { await reconcileProtection(); return }
         siteAlertKey = nil // a site mismatch that outlived the window counts as new
         if settings.killSwitch, let reason = reblockReason(status, site) {
             log.warning("Still not allowed when the unblock window ended — blocking again")
@@ -282,6 +372,7 @@ extension Monitor {
         guard on != settings.killSwitch else { return }
         update { $0.killSwitch = on }
         guard on else {
+            await cancelVerificationSetup()
             do {
                 try await Privileged.run(KillSwitch.teardownScript, prompt: "Whereabouts needs your admin password to remove the kill switch helper.")
                 kill = KillSwitchStatus(reblockAt: kill.reblockAt)
@@ -292,8 +383,8 @@ extension Monitor {
         }
         if await installKillSwitchHelper() {
             // Turning it on is an explicit arm: drop any pause from an earlier unblock.
-            rearmKillSwitch()
             await refreshKillSwitchState()
+            rearmKillSwitch()
         } else {
             update { $0.killSwitch = false }
         }
@@ -323,21 +414,25 @@ extension Monitor {
         let version = KillSwitch.installedVersion()
         kill.needsSetup = settings.killSwitch && version != KillSwitch.helperVersion
         guard version == KillSwitch.helperVersion,
-              let engaged = try? await KillSwitch.sudoHelper("status").trimmingCharacters(in: .whitespacesAndNewlines) == "active"
+              let state = try? await KillSwitch.sudoHelper("status").trimmingCharacters(in: .whitespacesAndNewlines),
+              ["active", "verifying", "inactive"].contains(state)
         else { return }
+        let engaged = state != "inactive"
+        if state == "verifying" { kill.held = true; kill.verifying = true }
         if engaged && !kill.active {
             kill.active = true
             kill.reason = kill.reason ?? "Network is still blocked from an earlier session."
         } else if !engaged && kill.active {
             kill.active = false
             kill.held = false
+            kill.verifying = false
             kill.reason = nil
         }
     }
 
     func activateKillSwitch(_ reason: String) async {
         // A hold for sleep is a block already, but it lets VPN tunnels through: this one doesn't.
-        guard !kill.active || kill.held, !killInFlight, !Demo.enabled else { return }
+        guard settings.killSwitch, !kill.active || kill.held, !killInFlight, !Demo.enabled else { return }
         // The user unblocked to reconnect; blocking again inside that window would
         // undo their decision. reblockIfStillWrong() takes over when it ends.
         guard !kill.suppressed else {
@@ -351,20 +446,23 @@ extension Monitor {
         killInFlight = true
         defer { killInFlight = false }
         do {
-            _ = try await KillSwitch.sudoHelper("engage")
+            _ = try await firewall("engage")
             kill.active = true
             kill.held = false
+            kill.verifying = false
             kill.reason = reason
             kill.error = nil
             killActivation += 1
             log.warning("Kill switch engaged: \(reason)")
-            verifyBlocked(killActivation)
+            recordProtection("Firewall", "Blocked traffic: \(reason)")
+            if !testing { verifyBlocked(killActivation) }
         } catch {
             kill.error = "\(error)".contains("no com.apple anchor point")
                 ? "Could not block traffic: /etc/pf.conf is missing its anchor point, so the firewall rules can't be applied."
                 : "Could not block traffic — the helper may be missing. Turn the kill switch off and on again to reinstall it."
             log.error("Kill switch engage failed: \(error.localizedDescription)")
-            await refreshKillSwitchState()
+            recordProtection("Firewall error", kill.error ?? "Blocking failed.")
+            if !testing { await refreshKillSwitchState() }
         }
     }
 
@@ -384,6 +482,7 @@ extension Monitor {
     /// reconnect, or the next check (still in the wrong place) would re-engage it at once.
     func restoreConnection() async {
         kill.reblockAt = Date().addingTimeInterval(Self.reblockDelay)
+        await cancelVerificationSetup()
         if Demo.enabled { kill.active = false; return }
         reblockTask?.cancel()
         reblockTask = Task { [weak self] in
@@ -394,12 +493,14 @@ extension Monitor {
         killInFlight = true
         defer { killInFlight = false }
         do {
-            _ = try await KillSwitch.sudoHelper("release")
+            _ = try await firewall("release")
             kill.active = false
             kill.held = false
+            kill.verifying = false
             kill.reason = nil
             kill.error = nil
             killActivation += 1
+            recordProtection("Firewall", "Manually unblocked for two minutes.")
         } catch {
             kill.error = "Failed to lift the block. Run this in Terminal, or reboot: \(KillSwitch.manualUnblockCommand)"
         }
@@ -409,11 +510,12 @@ extension Monitor {
     /// nothing reconnects over a bare connection before the VPN does. The VPN and the app's own
     /// lookups still get through. Synchronous: macOS waits for this notification's observers.
     func holdForSleep() {
-        guard settings.killSwitch, settings.holdOnWake, !kill.active, !kill.suppressed, pausedUntil == nil,
-              !killInFlight, !Demo.enabled, KillSwitch.installedVersion() == KillSwitch.helperVersion else { return }
-        let addresses = KillSwitch.holdAddresses()
+        guard settings.killSwitch, settings.holdOnWake || settings.strictProtection, !kill.active, !kill.suppressed, pausedUntil == nil,
+              !killInFlight, !Demo.enabled, testing || KillSwitch.installedVersion() == KillSwitch.helperVersion else { return }
+        let addresses = preparedHoldAddresses
         do {
-            _ = try runSync("/usr/bin/sudo", ["-n", KillSwitch.helperPath, "hold"] + addresses, timeout: 5)
+            if settings.strictProtection { try strictSleepFirewall(addresses) }
+            else { try holdFirewall(addresses) }
         } catch {
             kill.error = "Could not hold the network for sleep. Turn the kill switch off and on again to reinstall its helper."
             log.error("Sleep hold failed: \(error.localizedDescription)")
@@ -421,11 +523,13 @@ extension Monitor {
         }
         kill.active = true
         kill.held = true
+        kill.verifying = settings.strictProtection
         kill.reason = "Held since your Mac went to sleep, until a check finds your location allowed."
         kill.error = nil
         killActivation += 1
         // The last answer is from before sleep; the next one decides.
-        geo = GeoStatus()
+        markChecking("Mac is going to sleep.")
+        recordProtection("Firewall", "Held the network for sleep.")
         log.info("Network held for sleep, letting \(addresses.count) addresses through")
     }
 
@@ -435,13 +539,15 @@ extension Monitor {
         killInFlight = true
         defer { killInFlight = false }
         do {
-            _ = try await KillSwitch.sudoHelper("release")
+            _ = try await firewall("release")
             kill.active = false
             kill.held = false
+            kill.verifying = false
             kill.reason = nil
             kill.error = nil
             killActivation += 1
             log.info("Sleep hold lifted — your location is allowed")
+            recordProtection("Firewall", "Verification hold released.")
         } catch {
             kill.error = "Failed to lift the block. Run this in Terminal, or reboot: \(KillSwitch.manualUnblockCommand)"
         }

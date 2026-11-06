@@ -81,15 +81,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func statusMark() -> (StampGlyph.Mark, NSColor) {
         let m = monitor
-        // An engaged kill switch outranks everything; a leak must never show an all-clear glyph.
-        if m.kill.active { return (.blocked, .systemRed) }
-        if m.leaking && m.geo.kind == .safe { return (.leak, .systemOrange) }
-        switch m.geo.kind {
-        case .safe: return (.admitted, .systemGreen)
-        case .violation: return (.refused, .systemRed)
-        case .unknown: return (.unknown, .systemGray)
-        case .offline: return (.offline, .systemGray)
-        case .checking: return (.checking, .systemGray)
+        let mark = Whereabouts.statusMark(geo: m.geo.kind, site: m.site.state, blocked: m.kill.active, leaking: m.leaking)
+        switch mark {
+        case .blocked, .refused: return (mark, .systemRed)
+        case .leak: return (mark, .systemOrange)
+        case .admitted: return (mark, .systemGreen)
+        default: return (mark, .systemGray)
         }
     }
 
@@ -167,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return MenuHeader.Content(
             glyph: StampGlyph.image(mark, color: color),
             title: m.kill.active ? "Internet blocked" : m.geo.kind == .offline ? "No connection" : m.geo.location?.cityPlace ?? "Location unknown",
-            detail: m.kill.active ? (m.kill.held ? "Held since sleep" : "Kill switch engaged") : m.geoBadge.label + checked,
+            detail: m.kill.active ? (m.kill.verifying ? "Verifying connection" : m.kill.held ? "Network held" : "Kill switch engaged") : m.geoBadge.label + checked,
             issues: m.connectionIssues,
             status: m.kill.active ? [] : shortStatus(m.consistency))
     }

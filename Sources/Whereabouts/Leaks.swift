@@ -78,17 +78,37 @@ func dnsEgress(_ digOutput: String) -> String? {
 /// A resolver on this Mac itself: a DNS proxy (Cloudflare WARP, NextDNS, dnscrypt-proxy) that forwards queries on its own.
 func isLoopbackAddress(_ address: String) -> Bool { address == "::1" || address.hasPrefix("127.") }
 
+func unansweredExitCheck(_ transport: String) -> ExitCheck {
+    ExitCheck(state: .unknown, message: "No \(transport) probe answered. Connectivity and leak protection could not be verified.")
+}
+
 extension Monitor {
     func checkLeaks() async {
-        guard !leakInFlight else { return }
+        guard !leakInFlight else { leakRecheckQueued = true; return }
         leakInFlight = true
-        defer { leakInFlight = false }
-        let baseline = geo.location
+        defer { leakInFlight = false; leakRecheckQueued = false }
+        repeat {
+            leakRecheckQueued = false
+            let generation = pathChanges
+            let baseline = geo.location
+            let result = if let leakProbe { await leakProbe(baseline) } else { await probeLeaks(baseline) }
+            guard !Task.isCancelled else { return }
+            if generation != pathChanges || baseline != geo.location {
+                leakRecheckQueued = true
+                continue
+            }
+            if !leakRecheckQueued {
+                leak = result
+                announceLeaks()
+            }
+        } while leakRecheckQueued
+    }
+
+    private func probeLeaks(_ baseline: Location?) async -> LeakStatus {
         async let ipv6 = checkIpv6(baseline)
         async let udp = checkUdp(baseline)
         async let dns = checkDns(baseline)
-        leak = LeakStatus(ipv6: await ipv6, udp: await udp, dns: await dns)
-        announceLeaks()
+        return LeakStatus(ipv6: await ipv6, udp: await udp, dns: await dns)
     }
 
     private func checkIpv6(_ baseline: Location?) async -> ExitCheck {
@@ -105,9 +125,9 @@ extension Monitor {
                 ? ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["ip"] as? String
                 : text
             // No colon isn't IPv6 — an IPv4 echo would be a false "you have IPv6".
-            if let value, value.contains(":") { ip = value }
+            if let value, value.contains(":"), isIPAddress(value) { ip = value }
         }
-        guard let ip else { return ExitCheck(state: .none, message: "No IPv6 connectivity — nothing can leak over IPv6.") }
+        guard let ip else { return unansweredExitCheck("IPv6") }
 
         let located = await geolocate(ip)
         var check = ExitCheck(state: .unknown, ip: ip, isp: located?.isp, message: "")
@@ -146,7 +166,7 @@ extension Monitor {
             return seen
         }
         guard !seen.isEmpty else {
-            return ExitCheck(state: .none, message: "No STUN server answered over UDP, so WebRTC has no address to show sites.")
+            return unansweredExitCheck("UDP")
         }
         guard let baseline, let exitIp = baseline.ip, let exitCode = baseline.countryCode else {
             return ExitCheck(state: .unknown, ip: seen.joined(separator: ", "),
@@ -203,8 +223,9 @@ extension Monitor {
 
         let list = resolvers.map(\.address).joined(separator: ", ")
         // A router resolver is normal without a VPN and a leak with one.
-        let vpnLikely = baseline.map { $0.isVpn == true
+        let vpnLikely = geo.vpnName != nil || (baseline.map { $0.isVpn == true
             || (settings.ispMode == .allowlist && !settings.expectedIsps.isEmpty && ispMatches($0.isp, settings.expectedIsps)) } ?? false
+        )
 
         if tunnel {
             return DnsCheck(state: .ok, resolvers: resolvers, message: "DNS queries go through your VPN tunnel (\(list) via \(iface ?? "tunnel")).")

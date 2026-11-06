@@ -79,6 +79,7 @@ struct LocationSettings: View {
     var body: some View {
         let allowlist = m.settings.ruleMode == .allowlist
         Form {
+            ConnectionProfileSettings()
             Section {
                 Picker("Mode", selection: m.binding(\.ruleMode)) {
                     Text("Blocklist").tag(RuleMode.blocklist)
@@ -316,6 +317,10 @@ struct SiteSettings: View {
                         }
                         Text(rule.locations.map { "\(Countries.flag($0.countryCode)) \($0.label)" }.joined(separator: "   "))
                             .foregroundStyle(.secondary)
+                        if let parent = matchRule(rule.domain, m.settings.siteRules.filter { $0.domain != rule.domain }) {
+                            Text("Overrides \(parent.domain) for this domain and its subdomains.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         HStack(spacing: 16) {
                             Toggle("Edge line", isOn: ruleBinding(rule.domain, \.edgeLine)).help("Show the red screen-edge line on mismatch")
                             Toggle("Cut network", isOn: ruleBinding(rule.domain, \.killSwitch))
@@ -386,14 +391,11 @@ private struct SiteRuleEditor: View {
     let onSave: (SiteRule) -> Void
     @Environment(Monitor.self) private var m
     @Environment(\.dismiss) private var dismiss
-    @State private var country: String?
-    @State private var city = ""
+    @State private var pending = PendingSiteLocation()
 
     /// A picked country counts even if "Add" was never pressed, so it's never silently dropped.
     private var locations: [SiteLocation] {
-        guard let country else { return rule.locations }
-        let city = city.trimmingCharacters(in: .whitespaces)
-        return rule.locations + [SiteLocation(countryCode: country, country: Countries.name(country) ?? country, city: city.isEmpty ? nil : city)]
+        pending.appending(to: rule.locations)
     }
 
     var body: some View {
@@ -413,13 +415,12 @@ private struct SiteRuleEditor: View {
                         }
                     }
                     HStack {
-                        CountryPicker(title: country.map { "\(Countries.flag($0)) \(Countries.name($0) ?? $0)" } ?? "Choose Country…") { country = $0 }
-                        TextField("City", text: $city, prompt: Text("City (optional)")).labelsHidden().textFieldStyle(.roundedBorder)
+                        CountryPicker(title: pending.country.map { "\(Countries.flag($0)) \(Countries.name($0) ?? $0)" } ?? "Choose Country…") { pending.country = $0 }
+                        TextField("City", text: $pending.city, prompt: Text("City (optional)")).labelsHidden().textFieldStyle(.roundedBorder)
                         Button("Add") {
-                            rule.locations = locations
-                            city = "" // keep the country, so several cities can be added in a row
+                            pending.add(to: &rule.locations)
                         }
-                        .disabled(country == nil)
+                        .disabled(pending.country == nil)
                     }
                     if let loc = m.geo.location, let code = loc.countryCode {
                         let current = SiteLocation(countryCode: code, country: loc.country ?? code, city: loc.city)
@@ -477,6 +478,15 @@ struct ProtectionSettings: View {
                     Text("Apps reconnect the moment the Mac wakes, often before the VPN does. While it sleeps, only your VPN and Whereabouts' own checks get through, until the first check after waking finds your location allowed.")
                 }
                 .disabled(!m.settings.killSwitch)
+                Toggle(isOn: m.binding(\.strictProtection)) {
+                    Text("Strict protection mode")
+                    Text("Restrict internet access at startup, after route changes and while location checks are inconclusive. Requires the kill switch.")
+                }
+                .disabled(!m.settings.killSwitch)
+                if m.settings.strictProtection {
+                    Text("Verification services, DNS, local networks and known VPN endpoints remain reachable. An allowed check lifts the restriction; Unblock Now pauses it for two minutes.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if m.kill.active {
                     LabeledContent {
                         Button("Unblock Now") { Task { await m.restoreConnection() } }
@@ -535,6 +545,7 @@ struct ProtectionSettings: View {
                 }
             }
 
+            ProtectionTimelineSettings()
             computerName
 
             Section {

@@ -8,6 +8,19 @@ enum Store {
     static let settingsURL = dir.appendingPathComponent("settings.json")
     static let historyURL = dir.appendingPathComponent("history.json")
     static let maxHistory = 200
+    static let maxTimeline = 500
+    static let timelineURL = dir.appendingPathComponent("protection-timeline.json")
+
+    static func loadTimeline() -> [ProtectionEvent] {
+        guard let data = try? Data(contentsOf: timelineURL),
+              let events = try? JSONDecoder().decode([ProtectionEvent].self, from: data) else { return [] }
+        return Array(events.prefix(maxTimeline))
+    }
+
+    static func saveTimeline(_ events: [ProtectionEvent]) {
+        write(events, to: timelineURL)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: timelineURL.path)
+    }
 
     static func loadSettings() -> AppSettings {
         importGeoMeisterOnce()

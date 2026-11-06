@@ -30,18 +30,6 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Whereabouts reads the active tab of your browser to check per-site location rules.</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<!-- ip-api.com's free tier is HTTP only; it's the one provider that flags VPN/proxy exits. -->
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>ip-api.com</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-			</dict>
-		</dict>
-	</dict>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 doxigo</string>
 	<key>NSPrincipalClass</key>

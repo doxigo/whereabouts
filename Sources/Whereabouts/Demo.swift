@@ -50,6 +50,10 @@ enum Demo {
     }
 
     @MainActor static func apply(to m: Monitor) {
+        if scenario == "timeline" {
+            m.timeline = timeline
+            m.update { $0.protectionTimeline = true }
+        }
         let checked = Date().addingTimeInterval(-40)
         m.systemTimeZone = "Europe/Lisbon"
         // The real name would show in screenshots, and warn if it has the owner's in it.
@@ -80,5 +84,19 @@ enum Demo {
         m.reach = [("github.com", 38), ("wikipedia.org", 52), ("example.com", 61)].map {
             ReachResult(host: $0.0, status: blocked ? .blocked : .reachable, latencyMs: blocked ? nil : $0.1)
         }
+    }
+
+    static var timeline: [ProtectionEvent] {
+        let now = Date()
+        return [
+            ProtectionEvent(date: now, category: "Location check",
+                            detail: "ipwho.is metadata: 203.0.113.42 | Lisbon, Portugal | AS64500 | Example Transit. Your IP is in an allowed country: Portugal."),
+            ProtectionEvent(date: now.addingTimeInterval(-65), category: "Connection", detail: "Network route changed."),
+            ProtectionEvent(date: now.addingTimeInterval(-90), category: "Firewall error",
+                            detail: "Verification could not be set up. Use Unblock Now, then Set Up Now to update the firewall helper."),
+            ProtectionEvent(date: now.addingTimeInterval(-120), category: "Firewall", detail: "Restricted internet while verifying the connection."),
+            ProtectionEvent(date: now.addingTimeInterval(-180), category: "Location check", detail: "Location services did not answer while the firewall was active."),
+            ProtectionEvent(date: now.addingTimeInterval(-86400), category: "Recording", detail: "Protection timeline enabled."),
+        ]
     }
 }
