@@ -160,6 +160,20 @@ import Foundation
     }
     // A normal user gets past validation, then can't read pf (exit 5).
     if getuid() != 0 { check(holdStatus(["192.0.2.1", "2001:db8::1", "dns:192.0.2.53", "dns:2001:db8::53"]) == 5, "hold accepts addresses") }
+    // sudo passes the caller's PATH through, so a planted grep must never be the one the helper runs.
+    let fakeBin = NSTemporaryDirectory() + "wa-selftest-fakebin-\(UUID().uuidString)"
+    let planted = fakeBin + "/ran"
+    try? FileManager.default.createDirectory(atPath: fakeBin, withIntermediateDirectories: true)
+    try? "#!/bin/sh\ntouch \(Privileged.q(planted))\nexit 0\n".write(toFile: fakeBin + "/grep", atomically: true, encoding: .utf8)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeBin + "/grep")
+    _ = try? runSync("/usr/bin/env", ["PATH=\(fakeBin):/usr/bin:/bin", "/bin/bash", killPath, "status"], timeout: 10)
+    check(!FileManager.default.fileExists(atPath: planted), "helper ignores the caller's PATH")
+    // Admin scripts go to osascript inline, never through a file; run one unprivileged to prove the quoting survives.
+    let tricky = "#!/bin/bash\n/bin/cat <<'EOF'\nit's \"quoted\" \\ $HOME\nEOF\n"
+    let inline = Privileged.appleScript(tricky, prompt: "p").replacingOccurrences(of: " with prompt \"p\" with administrator privileges", with: "")
+    check((try? runSync("/usr/bin/osascript", ["-e", inline], timeout: 10))?.trimmingCharacters(in: .newlines) == "it's \"quoted\" \\ $HOME",
+          "admin scripts survive inline quoting")
+    try? FileManager.default.removeItem(atPath: fakeBin)
     try? FileManager.default.removeItem(atPath: killPath)
     let netstat = """
     Active Internet connections (including servers)

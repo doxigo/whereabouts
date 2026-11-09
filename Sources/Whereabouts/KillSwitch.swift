@@ -25,7 +25,7 @@ func reblockReason(_ geo: GeoStatus, _ site: SiteWatchStatus) -> String? {
 }
 
 enum KillSwitch {
-    static let helperVersion = 3
+    static let helperVersion = 4
     static let helperPath = "\(Privileged.appDir)/killswitch-helper.sh"
     static let tokenFile = "\(Privileged.appDir)/killswitch-pf.token"
     static let sudoersPath = "/etc/sudoers.d/whereabouts-killswitch"
@@ -43,6 +43,9 @@ enum KillSwitch {
     # Whereabouts kill switch helper. Cuts internet traffic with pf. Interfaces are
     # never touched and nothing persistent is written, so a reboot restores traffic.
     set -uo pipefail
+    # macOS sudo keeps the caller's PATH (no secure_path), so without this any program
+    # running as the user could plant its own grep or rm and run it as root.
+    export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
     PFCTL=/sbin/pfctl
     ANCHOR=\#(Privileged.q(anchor))

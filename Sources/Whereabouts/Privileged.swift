@@ -45,15 +45,16 @@ enum Privileged {
         """
     }
 
+    /// The AppleScript that runs `script` as root. The script travels inline: a file in the user's
+    /// temp folder could be rewritten by any program running as the user while the password dialog waits.
+    static func appleScript(_ script: String, prompt: String) -> String {
+        func osa(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+        return "do shell script \(osa("/bin/bash -c " + q(script))) with prompt \(osa(prompt)) with administrator privileges"
+    }
+
     /// Runs a script once under a single admin-password prompt.
     @discardableResult static func run(_ script: String, prompt: String) async throws -> String {
-        let path = NSTemporaryDirectory() + "whereabouts-setup-\(UUID().uuidString).sh"
-        try script.write(toFile: path, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path)
-        defer { try? FileManager.default.removeItem(atPath: path) }
-        func osa(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
-        let source = "do shell script \(osa("/bin/bash " + q(path))) with prompt \(osa(prompt)) with administrator privileges"
-        return try await Whereabouts.run("/usr/bin/osascript", ["-e", source], timeout: 60)
+        try await Whereabouts.run("/usr/bin/osascript", ["-e", appleScript(script, prompt: prompt)], timeout: 60)
     }
 
     static func isUserCanceled(_ error: Error) -> Bool {
