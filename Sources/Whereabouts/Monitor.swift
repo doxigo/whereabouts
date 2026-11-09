@@ -80,7 +80,7 @@ final class Monitor {
     @ObservationIgnored private var launchWatch: NSKeyValueObservation?
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
     @ObservationIgnored private var pathSatisfied = true
-    @ObservationIgnored private var pathSeen = false
+    @ObservationIgnored private var pathRoute: String?
     /// Bumped on each network change or wake, so a check that straddles one isn't published as current.
     @ObservationIgnored private(set) var pathChanges = 0
     @ObservationIgnored var lookup: () async -> (Location, Provider)? = lookupExit
@@ -395,10 +395,15 @@ final class Monitor {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
+            // Wi-Fi link quality is part of the path too, so it going good → moderate → good fires
+            // updates on an unchanged route. Only these fields say where traffic goes.
+            let route = "\(path.status) \(path.availableInterfaces.map(\.name)) \(path.gateways) \(path.supportsIPv4) \(path.supportsIPv6) \(path.supportsDNS)"
             Task { @MainActor in
                 guard let self else { return }
                 self.pathSatisfied = satisfied
-                guard self.pathSeen else { self.pathSeen = true; return }
+                guard route != self.pathRoute else { return }
+                defer { self.pathRoute = route }
+                guard self.pathRoute != nil else { return }
                 self.markChecking()
                 self.netDebounce?.cancel()
                 self.netDebounce = Task {
