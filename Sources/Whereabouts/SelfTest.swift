@@ -108,12 +108,18 @@ import Foundation
     check(!isPrivateAddress("8.8.8.8") && !isPrivateAddress("2001:4860:4860::8888"), "public addresses")
     check(isLoopbackAddress("127.0.2.2") && isLoopbackAddress("::1") && !isLoopbackAddress("10.0.0.1"), "loopback resolvers are local proxies")
     check(networkKey("198.51.100.7") == networkKey("198.51.100.240") && networkKey("198.51.100.7") != networkKey("198.51.101.7"), "IPv4 lookups share a /24")
+    check(udpStrays(["198.51.100.74", "198.51.100.66"], exit: "198.51.100.66").isEmpty, "UDP from the exit's own pool of addresses isn't another way out")
+    check(udpStrays(["198.51.100.66", "203.0.113.9"], exit: "198.51.100.66") == ["203.0.113.9"], "UDP from another network still stands out")
     check(networkKey("2001:db8:12:1::a") == networkKey("2001:db8:12:ff::b") && networkKey("2001:db8:12::1") != networkKey("2001:db8:13::1"), "IPv6 lookups share a /48")
     check(asNumber("AS56655 Gigahost AS") == 56655 && asNumber("Gigahost") == nil, "AS number from ip-api")
     let viaApi = Location(isp: "Tunnel Provider AB", asn: 64500), viaWho = Location(isp: "Tunnel Hosting", asn: 64500)
     check(sameNetwork(viaApi, viaWho), "one AS number is one network, whatever its names")
     check(!sameNetwork(viaApi, Location(isp: "Tunnel Provider AB", asn: 64501)), "another AS number is another network")
     check(sameNetwork(Location(isp: "Tunnel Provider AB"), Location(isp: "Tunnel Provider")), "without AS numbers, names decide")
+    let info = try? parseIpInfo(["ip": "192.0.2.1", "city": "Manchester", "country": "gb", "loc": "53.4809,-2.2374", "org": "AS9009 M247 Europe SRL", "timezone": "Europe/London"])
+    check(info?.countryCode == "GB" && info?.asn == 9009 && info?.isp == "M247 Europe SRL" && info?.timeZone == "Europe/London" && info?.lat == 53.4809,
+          "ipinfo.io's answer reads as the others do")
+    check((try? parseIpInfo(["ip": "192.0.2.1", "bogon": true])) == nil, "an ipinfo.io answer with no country is no answer")
     // STUN: 203.0.113.42 port 54321, XOR'd with the magic cookie as a server sends it.
     let tid: [UInt8] = Array(1...12)
     let stunHead: [UInt8] = [0x01, 0x01, 0x00, 0x0C, 0x21, 0x12, 0xA4, 0x42] + tid

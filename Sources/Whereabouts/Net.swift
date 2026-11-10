@@ -216,7 +216,18 @@ func isTunnelInterface(_ name: String?) -> Bool {
 
 // MARK: - Geolocation providers
 
-enum Provider { case ipApi, ipWho }
+/// In the order they're asked. The raw value is the name the timeline shows.
+enum Provider: String, CaseIterable {
+    case ipWho = "ipwho.is", ipApi = "ipapi.co", ipInfo = "ipinfo.io"
+
+    func fetch(_ ip: String) async throws -> Location {
+        switch self {
+        case .ipWho: try await fetchIpWho(ip)
+        case .ipApi: try await fetchIpApi(ip)
+        case .ipInfo: try await fetchIpInfo(ip)
+        }
+    }
+}
 
 private func string(_ d: [String: Any], _ key: String) -> String? { d[key] as? String }
 
@@ -253,6 +264,23 @@ func parseIpWho(_ d: [String: Any]) throws -> Location {
                     lat: d["latitude"] as? Double, lon: d["longitude"] as? Double)
 }
 
+/// ipinfo.io, the third: ipapi.co turns away a VPN's shared addresses as rate-limited, which left ipwho.is alone.
+func fetchIpInfo(_ ip: String) async throws -> Location {
+    guard isIPAddress(ip) else { throw HTTPError(status: -2) }
+    return try parseIpInfo(try await fetchJSON("https://ipinfo.io/\(ip)/json"))
+}
+
+func parseIpInfo(_ d: [String: Any]) throws -> Location {
+    guard let ip = string(d, "ip"), isIPAddress(ip), let country = string(d, "country"), country.count == 2 else { throw HTTPError(status: -2) }
+    // "AS9009 M247 Europe SRL", and "53.4809,-2.2374".
+    let org = string(d, "org"), asn = org.flatMap(asNumber)
+    let place = (string(d, "loc") ?? "").split(separator: ",").compactMap { Double($0) }
+    return Location(ip: ip, country: Countries.name(country.uppercased()), countryCode: country.uppercased(),
+                    region: string(d, "region"), city: string(d, "city"),
+                    isp: asn == nil ? org : org?.split(separator: " ").dropFirst().joined(separator: " "), asn: asn,
+                    timeZone: string(d, "timezone"), lat: place.count == 2 ? place[0] : nil, lon: place.count == 2 ? place[1] : nil)
+}
+
 func isIPAddress(_ text: String) -> Bool { IPv4Address(text) != nil || IPv6Address(text) != nil }
 
 func lookupExit() async -> (Location, Provider)? {
@@ -272,8 +300,8 @@ func lookupExit() async -> (Location, Provider)? {
 
 @MainActor private func exitMetadata(_ ip: String) async -> (Location, Provider)? {
     if let hit = exitCache, hit.location.ip == ip, hit.at.timeIntervalSinceNow > -3600 { return (hit.location, hit.source) }
-    for source in [Provider.ipWho, .ipApi] {
-        guard let location = try? await (source == .ipWho ? fetchIpWho(ip) : fetchIpApi(ip)), location.ip == ip else { continue }
+    for source in Provider.allCases {
+        guard let location = try? await source.fetch(ip), location.ip == ip else { continue }
         exitCache = (Date(), location, source)
         return (location, source)
     }
@@ -281,9 +309,11 @@ func lookupExit() async -> (Location, Provider)? {
 }
 
 func confirmLocationViolation(_ primary: Location, source: Provider, reason: ViolationReason, settings: AppSettings) async -> Bool {
-    guard let ip = primary.ip,
-          let second = try? await (source == .ipApi ? fetchIpWho(ip) : fetchIpApi(ip)),
-          second.ip == ip, second.countryCode == primary.countryCode else { return false }
+    guard let ip = primary.ip else { return false }
+    // The first other provider to answer decides: one that's down or rate-limited is no opinion.
+    var answer: Location?
+    for other in Provider.allCases where other != source && answer == nil { answer = try? await other.fetch(ip) }
+    guard let second = answer, second.ip == ip, second.countryCode == primary.countryCode else { return false }
     if reason == .isp {
         guard let isp = second.isp else { return false }
         return !ispMatches(isp, settings.expectedIsps)

@@ -206,7 +206,7 @@ enum KillSwitch {
     }
 
     static func holdAddresses(strict: Bool = false) -> [String] {
-        let lookups = ["api.ipify.org", "ipv4.icanhazip.com", "ipwho.is", "ipapi.co"].flatMap(resolveAddresses)
+        let lookups = ["api.ipify.org", "ipv4.icanhazip.com"] + Provider.allCases.map(\.rawValue).flatMap(resolveAddresses)
         var passed = dnsAddresses() + lookups
         if let probe = lookups.first(where: { !$0.contains(":") }),
            let route = try? runSync("/sbin/route", ["-n", "get", probe], timeout: 3),

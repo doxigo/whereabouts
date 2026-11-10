@@ -172,9 +172,11 @@ extension Monitor {
             return ExitCheck(state: .unknown, ip: seen.joined(separator: ", "),
                              message: "UDP leaves from \(seen.joined(separator: ", ")). Waiting on an IPv4 result to compare against.")
         }
-        let others = seen.filter { $0 != exitIp }
+        let others = udpStrays(seen, exit: exitIp)
         guard !others.isEmpty else {
-            return ExitCheck(state: .ok, ip: exitIp, isp: baseline.isp, message: "UDP leaves from your IP address too, so WebRTC shows sites nothing new.")
+            return ExitCheck(state: .ok, ip: exitIp, isp: baseline.isp, message: seen.allSatisfy { $0 == exitIp }
+                ? "UDP leaves from your IP address too, so WebRTC shows sites nothing new."
+                : "UDP leaves from \(seen.joined(separator: ", ")), your VPN's own addresses beside \(exitIp): it shares connections among them.")
         }
         var places: [Location] = []
         for other in others {
@@ -284,4 +286,10 @@ extension Monitor {
         log.warning("Leak detected: \(key)")
         notify(leakHeadline, messages.joined(separator: " "), sound: true, topic: "leak")
     }
+}
+
+/// The addresses UDP left from that aren't the exit's. One in the exit's own network is the VPN's pool,
+/// which every connection is dealt from (the IP itself alternates check to check), not a second way out.
+func udpStrays(_ seen: [String], exit: String) -> [String] {
+    seen.filter { networkKey($0) != networkKey(exit) }
 }

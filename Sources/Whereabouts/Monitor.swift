@@ -536,7 +536,7 @@ final class Monitor {
             }
             guard pathChanges == pathAtStart, !Task.isCancelled else { return geo }
             let identity = [location.ip, location.cityPlace, location.asn.map { "AS\($0)" }, location.isp].compactMap { $0 }.joined(separator: " | ")
-            let provider = source == .ipWho ? "ipwho.is" : "ipapi.co"
+            let provider = source.rawValue
             recordProtection("Location check", "\(provider) metadata: \(identity). \(verdict.message)",
                              location: TimelineLocation(place: location.cityPlace, ip: location.ip, asn: location.asn,
                                                         isp: location.isp, source: provider, message: verdict.message))

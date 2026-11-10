@@ -73,7 +73,7 @@ It loads block rules into the macOS packet filter (`pf`), in the anchor `com.app
 When the Mac is about to sleep, the helper loads a second set of rules into the same anchor. It works like the kill switch block, with three exceptions:
 
 - Traffic inside a VPN tunnel (`utun0` to `utun31`, `ipsec0` to `ipsec3`, `ppp0` to `ppp3`) passes. What goes into a tunnel still leaves through Wi-Fi or Ethernet, where only the next two pass.
-- The addresses `api.ipify.org`, `ipv4.icanhazip.com`, `ipwho.is` and `ipapi.co` resolve to pass, so the app can check where you are. So does DNS (port 53 only) to the Mac's DNS servers, when they're public ones like `1.1.1.1`, so it can look those names up. DNS servers on your local network pass anyway.
+- The addresses `api.ipify.org`, `ipv4.icanhazip.com`, `ipwho.is`, `ipapi.co` and `ipinfo.io` resolve to pass, so the app can check where you are. So does DNS (port 53 only) to the Mac's DNS servers, when they're public ones like `1.1.1.1`, so it can look those names up. DNS servers on your local network pass anyway.
 - While a tunnel carries your connection, the public addresses the Mac reaches straight from Wi-Fi or Ethernet pass too. With every app inside the tunnel, those are the VPN's own server, plus anything that skips the VPN anyway. This lets the VPN reconnect.
 
 After waking, the first check that finds your location allowed lifts the block. A check that finds it not allowed turns the hold into a normal kill switch block. **Unblock Network** lifts it by hand as usual.
@@ -91,7 +91,7 @@ The current app uses version 5 of the helper for sleep holds and strict verifica
 
 ### Where lookups go
 
-Every location request uses HTTPS, including redirects. Each check reads the current IPv4 exit from `api.ipify.org`, with `ipv4.icanhazip.com` as a fallback. [ipwho.is](https://ipwho.is) geolocates that exact address, with [ipapi.co](https://ipapi.co) as an independent fallback. Location metadata is cached for that address for up to an hour to stay within the free providers' quotas; a new exit is looked up immediately. Disputed violations force a fresh metadata lookup on the next check. VPN names still come from macOS; the providers' free tiers do not supply VPN/proxy flags, so that field stays unknown.
+Every location request uses HTTPS, including redirects. Each check reads the current IPv4 exit from `api.ipify.org`, with `ipv4.icanhazip.com` as a fallback. [ipwho.is](https://ipwho.is) geolocates that exact address, with [ipapi.co](https://ipapi.co) and then [ipinfo.io](https://ipinfo.io) as independent fallbacks. Location metadata is cached for that address for up to an hour to stay within the free providers' quotas; a new exit is looked up immediately. Disputed violations force a fresh metadata lookup on the next check. VPN names still come from macOS; the providers' free tiers do not supply VPN/proxy flags, so that field stays unknown.
 
 The IPv6 exit is read from `api6.ipify.org` or `ipv6.icanhazip.com`, then from the dual-stack `api64.ipify.org` or `icanhazip.com`, which a proxy on the way may reach over IPv6 even when the Mac has none. The UDP exit comes from the STUN servers `stun.l.google.com` and `stun.cloudflare.com`. Failed probes show **Unknown**, since an unanswered probe cannot establish that a leak is impossible. These diagnostics run separately from the location-check schedule.
 
