@@ -13,6 +13,7 @@ import Foundation
     check(normalizeDomain("https://www.Example.com/en?x=1") == "example.com", "normalizeDomain URL")
     check(normalizeDomain("github.com:443") == "github.com", "normalizeDomain port")
     check(normalizeDomain("   ") == nil, "normalizeDomain empty")
+    check(normalizeDomain("https://Bank.example./login") == "bank.example" && normalizeDomain("...") == nil, "normalizeDomain trailing dot")
 
     // Country / ISP rule. Fixtures are made up: user-assigned ISO codes (XA, XB),
     // documentation IPs and fixed-offset zones, so no real place is hardcoded.
@@ -58,7 +59,13 @@ import Foundation
         SiteLocation(countryCode: "XB", country: "Exit Country", city: "exit city"),
         SiteLocation(countryCode: "XYZ", country: "?", city: nil),
     ])]
+    n.domains = ["https://www.GitHub.com/", "github.com", " ", "example.com."]
     n.normalize()
+    check(n.domains == ["github.com", "example.com"], "reachability hosts are kept as probed, once each: \(n.domains)")
+    var slow = AppSettings()
+    slow.intervalMs = .max
+    slow.normalize()
+    check(slow.intervalMs == 86_400_000, "interval ceiling")
     check(n.intervalMs == 10_000, "interval floor")
     check(n.expectedIsps == ["Tunnel"], "ISP dedupe")
     check(n.siteRules.first?.domain == "shop.example" && n.siteRules.first?.locations.count == 1, "site rule normalize")
@@ -78,6 +85,10 @@ import Foundation
     let rule = SiteRule(domain: "bank.example", locations: [SiteLocation(countryCode: "XA", country: "Home Country", city: "Home City")])
     check(matchRule("accounts.bank.example", [rule]) != nil, "subdomain matches")
     check(matchRule("notbank.example", [rule]) == nil, "suffix without dot doesn't match")
+    check(normalizeDomain("https://accounts.bank.example./").flatMap { matchRule($0, [rule]) } != nil, "a trailing dot doesn't slip past a rule")
+    check(appleScriptTarget(bundleID: "com.google.Chrome", name: "Google Chrome") == "application id \"com.google.Chrome\"", "a browser is named by its bundle ID")
+    check(appleScriptTarget(bundleID: "x\" to do shell script \"id", name: "Google Chrome") == "application \"Google Chrome\""
+          && appleScriptTarget(bundleID: nil, name: "Safari") == "application \"Safari\"", "a bundle ID that isn't one never reaches the script")
     check(locationSatisfies(Location(countryCode: "XA", city: "home city"), rule), "city match is case-insensitive")
     check(!locationSatisfies(Location(countryCode: "XA", city: "Other City"), rule), "wrong city")
     // Browser scripts must not block the main actor.
@@ -160,6 +171,27 @@ import Foundation
     }
     // A normal user gets past validation, then can't read pf (exit 5).
     if getuid() != 0 { check(holdStatus(["192.0.2.1", "2001:db8::1", "dns:192.0.2.53", "dns:2001:db8::53"]) == 5, "hold accepts addresses") }
+    // One refused address fails the whole hold, so the app leaves out what the helper won't take.
+    for bad in ["fe80::1%en0", "::ffff:192.0.2.1"] {
+        check(isIPAddress(bad) && !KillSwitch.accepts(bad) && holdStatus([bad]) == 2, "an address only Foundation takes is refused by both: \(bad)")
+    }
+    check(KillSwitch.accepts("192.0.2.1") && KillSwitch.accepts("2001:db8::1") && !KillSwitch.accepts("192.0.2") && !KillSwitch.accepts("2001:db8:1111:22")
+          && !KillSwitch.accepts(""), "the app takes the addresses the helper does")
+    // A router that hands out its link-local address as an IPv6 DNS server is common on home networks.
+    let homeDns = """
+    DNS configuration
+
+    resolver #1
+      nameserver[0] : 1.1.1.1
+      nameserver[1] : fe80::1%en0
+      nameserver[2] : 127.0.0.1
+      nameserver[3] : 2606:4700:4700::1111
+      nameserver[4] : 100.64.0.53
+      if_index : 14 (en0)
+    """
+    let dnsArgs = dnsHoldAddresses(homeDns)
+    check(dnsArgs == ["dns:1.1.1.1", "dns:2606:4700:4700::1111", "dns:100.64.0.53"], "hold DNS leaves out link-local and loopback resolvers: \(dnsArgs)")
+    if getuid() != 0 { check(holdStatus(dnsArgs) == 5, "the helper takes the DNS servers the app passes") }
     // sudo passes the caller's PATH through, so a planted grep must never be the one the helper runs.
     let fakeBin = NSTemporaryDirectory() + "wa-selftest-fakebin-\(UUID().uuidString)"
     let planted = fakeBin + "/ran"
@@ -188,6 +220,14 @@ import Foundation
     """
     let peers = directPeers(netstat, local: ["192.168.1.20", "2001:db8::20"])
     check(peers == ["198.51.100.7", "2001:db8:1::5"], "direct peers: only public ones from a physical address, once: \(peers)")
+    // netstat -l prints IPv6 in full. Cut to 16 characters, as it is without -l, a peer is no address at all.
+    let wide = """
+    tcp6       0      0  2001:db8:aaaa:bbbb:cccc:dddd:eeee:20.52311      2001:db8:1111:2222:3333:4444:5555:6.443      ESTABLISHED
+    tcp6       0      0  2001:db8::20.52312     2001:db8:1111:22.443   ESTABLISHED
+    tcp6       0      0  fe80::1%en0.52313      fe80::2%en0.443        ESTABLISHED
+    """
+    let widePeers = directPeers(wide, local: ["2001:db8:aaaa:bbbb:cccc:dddd:eeee:20", "2001:db8::20", "fe80::1%en0"])
+    check(widePeers == ["2001:db8:1111:2222:3333:4444:5555:6"], "direct peers: full IPv6 addresses, never a cut-off one: \(widePeers)")
     for (name, script) in [("setup", KillSwitch.setupScript(user: "alice")), ("teardown", KillSwitch.teardownScript), ("helper", KillSwitch.helperScript)] {
         let path = NSTemporaryDirectory() + "wa-selftest-\(name).sh"
         try? script.write(toFile: path, atomically: true, encoding: .utf8)
@@ -285,6 +325,15 @@ import Foundation
     check(offHomeTime(["TZ": "Etc/GMT-1"], home: "GMT+0330", justLaunched: false), "app on an old home zone is reopened")
     check(!offHomeTime(nil, home: "GMT+0330", justLaunched: false) && offHomeTime(nil, home: "GMT+0330", justLaunched: true),
           "hidden environment: reopened only as it starts")
+    check(isOwnReopen("x.app", pid: 7, reopening: ["x.app"], opened: [:]) && isOwnReopen("x.app", pid: 7, reopening: [], opened: ["x.app": 7]),
+          "a reopen under way, and the copy it opened, are left alone")
+    check(!isOwnReopen("x.app", pid: 8, reopening: [], opened: ["x.app": 7]) && !isOwnReopen("x.app", pid: 7, reopening: ["y.app"], opened: ["y.app": 7]),
+          "a copy opened by anyone else, however soon after, is checked")
+    let gone = Process()
+    gone.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+    try? gone.run()
+    gone.waitUntilExit()
+    check(processExists(getpid()) && processExists(1) && !processExists(gone.processIdentifier), "a quit app is known by its process, gone or not")
     var apps = AppSettings()
     apps.homeTimeApps = ["test.app", "", "test.app"]
     apps.normalize()

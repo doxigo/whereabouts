@@ -52,9 +52,10 @@ enum Privileged {
         return "do shell script \(osa("/bin/bash -c " + q(script))) with prompt \(osa(prompt)) with administrator privileges"
     }
 
-    /// Runs a script once under a single admin-password prompt.
+    /// Runs a script once under a single admin-password prompt. The timeout covers the prompt too,
+    /// so it leaves time to fetch a password from a password manager.
     @discardableResult static func run(_ script: String, prompt: String) async throws -> String {
-        try await Whereabouts.run("/usr/bin/osascript", ["-e", appleScript(script, prompt: prompt)], timeout: 60)
+        try await Whereabouts.run("/usr/bin/osascript", ["-e", appleScript(script, prompt: prompt)], timeout: 300)
     }
 
     static func isUserCanceled(_ error: Error) -> Bool {

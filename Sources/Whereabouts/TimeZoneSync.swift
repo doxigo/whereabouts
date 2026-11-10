@@ -253,27 +253,53 @@ extension Monitor {
     func keepOnHomeTime(_ app: NSRunningApplication, justLaunched: Bool) async {
         guard settings.matchTimeZone, let home = settings.homeTimeZone, app != .current,
               let id = app.bundleIdentifier, settings.homeTimeApps.contains(id), let url = app.bundleURL else { return }
-        // Within moments of a reopen this is that reopen, which an Apple app won't let us read back.
-        if let at = homeTimeReopens[id], Date().timeIntervalSince(at) < 15 { return }
-        guard offHomeTime(processEnvironment(app.processIdentifier), home: home, justLaunched: justLaunched) else { return }
-        homeTimeReopens[id] = Date()
+        guard !isOwnReopen(id, pid: app.processIdentifier, reopening: homeTimeReopening, opened: homeTimeOpened),
+              offHomeTime(processEnvironment(app.processIdentifier), home: home, justLaunched: justLaunched) else { return }
+        homeTimeReopening.insert(id)
+        defer { homeTimeReopening.remove(id) }
         let activate = justLaunched || app.isActive
-        // An app that won't quit, say over unsaved work, is left as it is.
-        guard app.terminate() else { return }
-        let deadline = Date().addingTimeInterval(10)
-        while !app.isTerminated, Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
-        guard app.isTerminated else { return }
         let config = NSWorkspace.OpenConfiguration()
         config.environment = ["TZ": home]
         config.activates = activate
-        homeTimeReopens[id] = Date()
-        do {
-            try await NSWorkspace.shared.openApplication(at: url, configuration: config)
-            log.info("Reopened \(id) on home time, \(home)")
-        } catch {
-            log.error("Couldn't reopen \(id) on home time: \(error.localizedDescription)")
+        var app = app
+        // More than once: a click in the Dock while the app is still quitting opens it first, without TZ,
+        // and opening it then only hands that copy back.
+        for _ in 1...3 {
+            // An app that won't quit, say over unsaved work, is left as it is.
+            guard app.terminate() else { return }
+            // Some take a while: Claude stops its sessions and servers first, well past 10 seconds.
+            let deadline = Date().addingTimeInterval(45)
+            // The process itself, not isTerminated: for Claude that flips seconds after it exits, or never,
+            // which left it closed, or let a click in the Dock open it first.
+            let pid = app.processIdentifier
+            while processExists(pid), Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+            guard !processExists(pid) else {
+                log.error("\(id) didn't quit, so it stays on the Mac's time zone until it's opened again")
+                return
+            }
+            do {
+                app = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+            } catch {
+                log.error("Couldn't reopen \(id) on home time: \(error.localizedDescription)")
+                return
+            }
+            if !offHomeTime(processEnvironment(app.processIdentifier), home: home, justLaunched: false) {
+                homeTimeOpened[id] = app.processIdentifier
+                log.notice("Reopened \(id) on home time, \(home)")
+                return
+            }
         }
+        log.error("\(id) keeps opening without the home time zone")
     }
+}
+
+/// Whether `pid` is still a process (one of another user's counts: it can't be signalled, but it's there).
+func processExists(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 || errno == EPERM }
+
+/// Whether this launch of `id` is this app's own reopen: one under way, or the very copy it opened (an Apple
+/// app's environment can't be read back to tell). Any other launch, however soon after, is checked as usual.
+func isOwnReopen(_ id: String, pid: pid_t, reopening: Set<String>, opened: [String: pid_t]) -> Bool {
+    reopening.contains(id) || opened[id] == pid
 }
 
 /// Whether an app on the list has to be reopened on `home`. An environment macOS hides (Apple's own

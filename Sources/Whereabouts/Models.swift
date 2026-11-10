@@ -151,8 +151,10 @@ struct AppSettings: Codable, Equatable {
 
     mutating func normalize() {
         countries = countries.map { $0.uppercased() }
-        domains = domains.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        intervalMs = max(10_000, intervalMs)
+        // Kept as the host that gets probed, so "https://github.com" and "github.com" are one entry.
+        var seenDomain = Set<String>()
+        domains = domains.compactMap(normalizeDomain).filter { seenDomain.insert($0).inserted }
+        intervalMs = min(86_400_000, max(10_000, intervalMs))
         if let zone = homeTimeZone, TimeZone(identifier: zone) == nil { homeTimeZone = nil }
         var seenApp = Set<String>()
         homeTimeApps = homeTimeApps.filter { !$0.isEmpty && seenApp.insert($0).inserted }
@@ -241,6 +243,8 @@ func normalizeDomain(_ raw: String) -> String? {
     value = String(value.split(separator: "?").first ?? "")
     value = String(value.split(separator: ":").first ?? "")
     if value.hasPrefix("www.") { value.removeFirst(4) }
+    // "example.com." is the same host written in full, and a rule for example.com has to match it.
+    while value.hasSuffix(".") { value.removeLast() }
     return value.isEmpty ? nil : value
 }
 

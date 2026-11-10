@@ -87,7 +87,7 @@ Some setups can't get through a hold, so you'd unblock by hand after waking:
 
 A VPN running on your router needs none of this: the Mac has nothing to reconnect, and the check goes out straight away.
 
-The current app uses version 3 of the helper for sleep holds and strict verification. An older helper shows **Setup needed** in Settings > Protection and asks for the admin password once more.
+The current app uses version 5 of the helper for sleep holds and strict verification. An older helper shows **Setup needed** in Settings > Protection and asks for the admin password once more.
 
 ### Where lookups go
 

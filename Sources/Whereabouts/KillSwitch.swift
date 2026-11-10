@@ -25,7 +25,7 @@ func reblockReason(_ geo: GeoStatus, _ site: SiteWatchStatus) -> String? {
 }
 
 enum KillSwitch {
-    static let helperVersion = 4
+    static let helperVersion = 5
     static let helperPath = "\(Privileged.appDir)/killswitch-helper.sh"
     static let tokenFile = "\(Privileged.appDir)/killswitch-pf.token"
     static let sudoersPath = "/etc/sudoers.d/whereabouts-killswitch"
@@ -82,12 +82,16 @@ enum KillSwitch {
         echo "whereabouts: failed to load pf block rules: $RULE_ERROR" >&2
         exit 3
       fi
-      # pf enable is reference counted; hold exactly one token so other pf
-      # users (Internet Sharing, the app firewall) are never disturbed.
-      if [ ! -s "$TOKEN_FILE" ]; then
+      # pf enable is reference counted; hold our own token so other pf users
+      # (Internet Sharing, the app firewall) are never disturbed. The token file
+      # outlives its reference when the Mac reboots or loses power while blocked,
+      # so ask again whenever pf isn't actually on; release drops every token listed.
+      # ponytail: a stale token is trusted while someone else keeps pf on. Check
+      # `pfctl -s References` for it if that ever lets a block lapse.
+      if [ ! -s "$TOKEN_FILE" ] || ! $PFCTL -s info 2>/dev/null | grep -qF "Status: Enabled"; then
         TOKEN=$($PFCTL -E 2>&1 | awk '/Token/ { print $NF }' | tail -n 1)
         if [ -n "$TOKEN" ]; then
-          echo "$TOKEN" > "$TOKEN_FILE"
+          echo "$TOKEN" >> "$TOKEN_FILE"
           chmod 600 "$TOKEN_FILE"
         fi
       fi
@@ -187,28 +191,42 @@ enum KillSwitch {
         return content.firstMatch(of: /WHEREABOUTS_HELPER_VERSION=(\d+)/).flatMap { Int($0.1) } ?? 0
     }
 
+    /// Whether the helper takes `address`, by its own test: a dotted quad, or IPv6 written in hex digits
+    /// and colons alone. Foundation takes more ("fe80::1%en0", "::ffff:192.0.2.1"), and one address the
+    /// helper refuses fails the whole hold.
+    static func accepts(_ address: String) -> Bool {
+        isIPAddress(address) && address.wholeMatch(of: /([0-9]{1,3}\.){3}[0-9]{1,3}|[0-9A-Fa-f:]{2,39}/) != nil
+    }
+
     /// What a hold lets through: the location lookups, DNS to public resolvers (the local
     /// network's pass already), and, while a tunnel carries the connection, the VPN's server.
     /// Blocking discovery, prepared off the main thread before sleep.
     static func dnsAddresses() -> [String] {
-        let resolvers = (try? runSync("/usr/sbin/scutil", ["--dns"], timeout: 3)).map(parseResolvers)?
-            .first { $0.scopedDomain == nil }?.nameservers.filter { isIPAddress($0) && !isLoopbackAddress($0) } ?? []
-        return Array(resolvers.prefix(4)).map { "dns:\($0)" }
+        (try? runSync("/usr/sbin/scutil", ["--dns"], timeout: 3)).map(dnsHoldAddresses) ?? []
     }
 
     static func holdAddresses(strict: Bool = false) -> [String] {
         let lookups = ["api.ipify.org", "ipv4.icanhazip.com", "ipwho.is", "ipapi.co"].flatMap(resolveAddresses)
-        let passed = dnsAddresses() + lookups
-        guard let probe = lookups.first(where: { !$0.contains(":") }),
-              let route = try? runSync("/sbin/route", ["-n", "get", probe], timeout: 3),
-              isTunnelInterface(route.firstMatch(of: /interface: (\S+)/).map { String($0.1) }) else { return passed }
-        let netstat = ["inet", "inet6"].compactMap { try? runSync("/usr/sbin/netstat", ["-an", "-f", $0], timeout: 3) }.joined()
-        let peers = directPeers(netstat, local: Set(physicalAddresses()))
-        return Array((passed + peers.filter { !lookups.contains($0) }.map { strict ? "vpn:\($0)" : $0 }).prefix(64))
+        var passed = dnsAddresses() + lookups
+        if let probe = lookups.first(where: { !$0.contains(":") }),
+           let route = try? runSync("/sbin/route", ["-n", "get", probe], timeout: 3),
+           isTunnelInterface(route.firstMatch(of: /interface: (\S+)/).map { String($0.1) }) {
+            // -l: without it netstat cuts an IPv6 address to 16 characters, which matches no local address.
+            let netstat = ["inet", "inet6"].compactMap { try? runSync("/usr/sbin/netstat", ["-anl", "-f", $0], timeout: 3) }.joined()
+            passed += directPeers(netstat, local: Set(physicalAddresses())).filter { !lookups.contains($0) }.map { strict ? "vpn:\($0)" : $0 }
+        }
+        return Array(passed.prefix(64)) // the helper's limit
     }
 }
 
-/// The public peers this Mac reaches from a physical interface's own address, from `netstat -an`.
+/// The `dns:` arguments for a hold, from `scutil --dns`: the default resolvers, but not a proxy on this
+/// Mac or an address the helper refuses. A link-local one ("fe80::1%en0") is on the local network, which passes anyway.
+func dnsHoldAddresses(_ scutil: String) -> [String] {
+    let resolvers = parseResolvers(scutil).first { $0.scopedDomain == nil }?.nameservers ?? []
+    return resolvers.filter { KillSwitch.accepts($0) && !isLoopbackAddress($0) }.prefix(4).map { "dns:\($0)" }
+}
+
+/// The public peers this Mac reaches from a physical interface's own address, from `netstat -anl`.
 /// While a tunnel carries the connection, that's the VPN's server, plus whatever bypasses the VPN anyway.
 // ponytail: a VPN on an unconnected socket (wireguard-go) shows no peer here, so a hold can't let it reconnect.
 func directPeers(_ netstat: String, local: Set<String>) -> [String] {
@@ -222,7 +240,7 @@ func directPeers(_ netstat: String, local: Set<String>) -> [String] {
         let fields = line.split(separator: " ")
         guard fields.count >= 5, fields[0].hasPrefix("tcp") || fields[0].hasPrefix("udp"),
               let mine = address(fields[3]), local.contains(mine),
-              let peer = address(fields[4]), !isPrivateAddress(peer), !peers.contains(peer) else { continue }
+              let peer = address(fields[4]), KillSwitch.accepts(peer), !isPrivateAddress(peer), !peers.contains(peer) else { continue }
         peers.append(peer)
     }
     return peers

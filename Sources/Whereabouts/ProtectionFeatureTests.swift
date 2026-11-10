@@ -163,6 +163,12 @@ import Foundation
           "strict mode disabled does not restrict an unknown connection")
     check(ProtectionState.action(settings: settings, geo: GeoStatus(), site: SiteWatchStatus(), kill: KillSwitchStatus(), paused: true) == .none,
           "paused monitoring suppresses strict mode")
+    check(ProtectionState.action(settings: settings, geo: GeoStatus(kind: .safe, location: exit), site: SiteWatchStatus(),
+                                 kill: KillSwitchStatus(active: true, held: true), paused: true) == .releaseHold,
+          "a pause still lets an allowed check end a hold")
+    check(ProtectionState.action(settings: settings, geo: GeoStatus(kind: .violation, location: exit, confirmed: true), site: SiteWatchStatus(),
+                                 kill: KillSwitchStatus(active: true, held: true), paused: true) == .none,
+          "a pause never turns a hold into a block")
 
     let toggled = Monitor(settings: settings, history: [], testing: true)
     toggled.verificationFirewall = { _ in }
@@ -185,12 +191,15 @@ import Foundation
         defer { try? fm.removeItem(at: root) }
         let rules = root.appending(path: "rules")
         let stub = root.appending(path: "pfctl")
+        // pf is on only once it has been asked to be, as after a boot.
+        let enabled = root.appending(path: "enabled")
+        let token = root.appending(path: "token")
         let script = """
         #!/bin/bash
         case "$*" in
           '-s rules') echo 'anchor "com.apple/*"' ;;
-          '-s info') echo 'Status: Enabled' ;;
-          '-E') echo 'Token : fixture' ;;
+          '-s info') if [ -f \(Privileged.q(enabled.path)) ]; then echo 'Status: Enabled'; else echo 'Status: Disabled'; fi ;;
+          '-E') touch \(Privileged.q(enabled.path)); echo 'Token : fixture' ;;
           *'-f -') cat > \(Privileged.q(rules.path)) ;;
           *'-s rules') cat \(Privileged.q(rules.path)) ;;
         esac
@@ -200,7 +209,7 @@ import Foundation
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stub.path)
         let helper = root.appending(path: "helper.sh")
         let content = KillSwitch.helperScript.replacingOccurrences(of: "PFCTL=/sbin/pfctl", with: "PFCTL=\(Privileged.q(stub.path))")
-            .replacingOccurrences(of: Privileged.q(KillSwitch.tokenFile), with: Privileged.q(root.appending(path: "token").path))
+            .replacingOccurrences(of: Privileged.q(KillSwitch.tokenFile), with: Privileged.q(token.path))
         try content.write(to: helper, atomically: true, encoding: .utf8)
         _ = try await run("/bin/bash", [helper.path, "verify", "192.0.2.20", "dns:1.1.1.1", "vpn:198.51.100.1"])
         let emitted = try String(contentsOf: rules, encoding: .utf8)
@@ -213,5 +222,12 @@ import Foundation
         check(state.trimmingCharacters(in: .whitespacesAndNewlines) == "verifying", "the helper identifies a verification hold after an app restart")
         _ = try await run("/bin/bash", [helper.path, "hold", "192.0.2.20"])
         check(try String(contentsOf: rules, encoding: .utf8).contains("pass quick on {"), "ordinary sleep holds retain their existing tunnel behavior")
+        check((try? String(contentsOf: token, encoding: .utf8)) == "fixture\n", "pf is asked for one reference while it stays on")
+        // A reboot or power loss while blocked: pf is off again, and the token file is still there.
+        try fm.removeItem(at: enabled)
+        let blockedAgain = (try? await run("/bin/bash", [helper.path, "engage"])) != nil
+        check(blockedAgain && fm.fileExists(atPath: enabled.path), "a token left by an earlier boot doesn't stop the next block")
+        _ = try await run("/bin/bash", [helper.path, "release"])
+        check(!fm.fileExists(atPath: token.path), "release drops every reference it took")
     } catch { check(false, "firewall rule fixture failed: \(error)") }
 }

@@ -67,7 +67,8 @@ struct GeneralSettings: View {
     }
 
     private var seconds: Binding<Int> {
-        Binding(get: { m.settings.intervalMs / 1000 }, set: { v in m.update { $0.intervalMs = max(10, v) * 1000 } })
+        // Clamped before multiplying: a typed 16-digit number would overflow and crash.
+        Binding(get: { m.settings.intervalMs / 1000 }, set: { v in m.update { $0.intervalMs = min(86_400, max(10, v)) * 1000 } })
     }
 }
 

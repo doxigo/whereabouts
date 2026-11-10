@@ -33,6 +33,17 @@ func locationSatisfies(_ location: Location, _ rule: SiteRule) -> Bool {
     }
 }
 
+/// How a script names a running browser: by bundle ID, so a renamed or localized app still resolves.
+/// The ID goes into the script's source, so one that isn't plainly an ID is never used: a quote in it
+/// would end the string and run the rest as script, with this app's Automation grants. `name` is one
+/// of the browser names above.
+func appleScriptTarget(bundleID: String?, name: String) -> String {
+    if let id = bundleID, !id.isEmpty, id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || ".-_".contains($0)) }) {
+        return "application id \"\(id)\""
+    }
+    return "application \"\(name)\""
+}
+
 func isAutomationDenied(_ error: Error) -> Bool {
     let text = "\(error)"
     return ["-1743", "Not authorized", "not allowed", "assistive access"].contains { text.contains($0) }
@@ -97,8 +108,7 @@ extension Monitor {
             return status
         }
 
-        // Target by bundle id / pid so a renamed or localized app still resolves.
-        let target = app.bundleIdentifier.map { "application id \"\($0)\"" } ?? "application \"\(name)\""
+        let target = appleScriptTarget(bundleID: app.bundleIdentifier, name: name)
         let script = switch kind {
         case .chromium: "tell \(target) to if (count of windows) > 0 then return URL of active tab of front window"
         case .webkit: "tell \(target) to if (count of windows) > 0 then return URL of current tab of front window"
@@ -135,7 +145,8 @@ extension Monitor {
             return SiteWatchStatus(state: .idle, message: "The active application changed during the check.")
         }
 
-        guard url.contains("://"), let host = normalizeDomain(url) else {
+        // Only a web page has a site: chrome://newtab or a file's path would read as the hosts "newtab" and "users".
+        guard url.hasPrefix("http://") || url.hasPrefix("https://"), let host = normalizeDomain(url) else {
             return kind == .firefox
                 ? unreadable(SiteWatchStatus(state: .unsupported, browser: name, message: "\(name)'s active tab URL can't be read for location checks."))
                 : SiteWatchStatus(state: .idle, browser: name, message: "No web page open in \(name).")

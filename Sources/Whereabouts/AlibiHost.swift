@@ -271,7 +271,9 @@ enum AlibiHost {
             }
         }
         // Atomic writes swap the file, so watch its folder. Other files there change too; what was sent filters those out.
-        let watch = DispatchSource.makeFileSystemObjectSource(fileDescriptor: open(Store.dir.path, O_EVTONLY), eventMask: .write, queue: .main)
+        let folder = open(Store.dir.path, O_EVTONLY)
+        guard folder >= 0 else { leave() } // no folder, so no app to hear from; a source on -1 would crash
+        let watch = DispatchSource.makeFileSystemObjectSource(fileDescriptor: folder, eventMask: .write, queue: .main)
         watch.setEventHandler { send() }
         watch.resume()
         send()

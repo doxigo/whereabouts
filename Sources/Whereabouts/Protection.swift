@@ -22,7 +22,9 @@ struct ProtectionState {
 
     static func action(settings: AppSettings, geo: GeoStatus, site: SiteWatchStatus,
                        kill: KillSwitchStatus, paused: Bool) -> ProtectionAction {
-        guard settings.killSwitch, !paused, !kill.suppressed else { return .none }
+        guard settings.killSwitch, !kill.suppressed else { return .none }
+        // Paused: nothing new blocks, but a hold still ends on the allowed check it was waiting for.
+        if paused { return kill.held && geo.kind == .safe ? .releaseHold : .none }
         var siteReason: String?
         if settings.browserWatch, site.state == .mismatch, let rule = site.rule, rule.killSwitch,
            geo.kind == .safe || geo.kind == .violation, let location = geo.location, !locationSatisfies(location, rule) {

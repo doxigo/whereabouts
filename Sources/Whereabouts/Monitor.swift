@@ -52,8 +52,10 @@ final class Monitor {
     @ObservationIgnored var leakProbe: ((Location?) async -> LeakStatus)?
     @ObservationIgnored var killInFlight = false
     @ObservationIgnored var timeZoneInFlight = false
-    /// When each app on the home-time list was last quit to reopen it, by bundle ID.
-    @ObservationIgnored var homeTimeReopens: [String: Date] = [:]
+    /// Apps on the home-time list being quit and reopened now, by bundle ID.
+    @ObservationIgnored var homeTimeReopening: Set<String> = []
+    /// The copy of each app this app opened on home time, by bundle ID.
+    @ObservationIgnored var homeTimeOpened: [String: pid_t] = [:]
     @ObservationIgnored var killActivation = 0
     @ObservationIgnored var triggerStates: [String: TriggerState] = [:]
     @ObservationIgnored var siteAlertKey: String?
@@ -198,7 +200,8 @@ final class Monitor {
         if old.launchAtLogin != next.launchAtLogin { syncLoginItem() }
         if interval { startChecks() }
         if !interval && rulesChanged {
-            Task { await checkGeo() }
+            // markChecking cleared the leak results too, and they read the provider rule.
+            Task { await checkGeo(); await checkLeaks() }
         }
         if old.domains != next.domains {
             // Show the edit now: a probe still in flight holds the old list for up to 8 s,
@@ -425,7 +428,7 @@ final class Monitor {
         protection.invalidate()
         vpnLookup = nil
         geo = GeoStatus(checkedAt: Date())
-        site = SiteWatchStatus(state: settings.browserWatch ? .noLocation : .disabled)
+        site = settings.browserWatch ? SiteWatchStatus(state: .noLocation, message: "Waiting for your location…") : SiteWatchStatus()
         leak = LeakStatus()
         preparedHoldAddresses = []
         publishStatus(geo)
@@ -662,6 +665,9 @@ final class Monitor {
             if result.status == .blocked { notify("Host unreachable", "\(result.host) is now blocked or unreachable.", topic: "reach|\(result.host)") }
             if result.status == .reachable { notify("Host reachable", "\(result.host) is reachable again.", topic: "reach|\(result.host)") }
         }
+        // A host added while this ran has no result yet: probe again (the task runs after `defer`
+        // clears the flag), rather than leave it "checking" until the next interval.
+        if reach.contains(where: { $0.status == .checking }) { Task { await checkReach() } }
     }
 }
 
