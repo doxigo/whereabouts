@@ -557,6 +557,13 @@ final class Monitor {
                                 : "Can't check your location while the network is blocked.")
             }
             return geo
+        } else if pathSatisfied && unknownStreak == 0 && geo.location != nil {
+            // One unanswered check on an unchanged route is nearly always a few seconds of resets
+            // upstream. Keep the last answer and its check time until the next check. A route
+            // change, wake or sleep clears geo.location first, so this never hides one.
+            unknownStreak = 1
+            recordProtection("Location check", "Location services did not answer. Keeping the last result until the next check.")
+            return geo
         } else {
             // "No route out" vs "the provider is broken": addresses survive sleep and
             // VPN transitions, so only a real probe can tell them apart.

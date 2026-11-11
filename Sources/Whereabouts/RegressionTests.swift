@@ -161,6 +161,21 @@ import Foundation
     try? await Task.sleep(for: .milliseconds(100))
     check(start.duration(to: .now) < .milliseconds(700), "a slow browser helper leaves the main actor responsive")
     check(await script.value == "done", "the asynchronous browser helper completes")
+
+    let blip = Monitor(settings: settings, history: [], testing: true)
+    blip.lookup = { (safe, .ipWho) }
+    await blip.checkGeo()
+    blip.lookup = { nil }
+    await blip.checkGeo()
+    check(blip.geo.kind == .safe && blip.geo.location == safe, "one unanswered check keeps the last answer")
+    await blip.checkGeo()
+    check(blip.geo.kind == .unknown || blip.geo.kind == .offline, "a second unanswered check shows the outage")
+    blip.lookup = { (safe, .ipWho) }
+    await blip.checkGeo()
+    blip.markChecking()
+    blip.lookup = { nil }
+    await blip.checkGeo()
+    check(blip.geo.location == nil, "a failed check after a route change never shows the old answer")
 }
 
 @MainActor func networkSmokeTest() async {
