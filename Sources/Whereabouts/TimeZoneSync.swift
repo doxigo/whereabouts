@@ -274,23 +274,38 @@ extension Monitor {
             let pid = app.processIdentifier
             while processExists(pid), Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
             guard !processExists(pid) else {
-                log.error("\(id) didn't quit, so it stays on the Mac's time zone until it's opened again")
+                log.error("\(id, privacy: .public) didn't quit, so it stays on the Mac's time zone until it's opened again")
                 return
             }
             do {
-                app = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+                app = try await open(url, config, replacing: pid)
             } catch {
-                log.error("Couldn't reopen \(id) on home time: \(error.localizedDescription)")
+                log.error("Couldn't reopen \(id, privacy: .public) on home time: \(error.localizedDescription, privacy: .public)")
                 return
             }
             if !offHomeTime(processEnvironment(app.processIdentifier), home: home, justLaunched: false) {
                 homeTimeOpened[id] = app.processIdentifier
-                log.notice("Reopened \(id) on home time, \(home)")
+                log.notice("Reopened \(id, privacy: .public) on home time, \(home, privacy: .public)")
                 return
             }
         }
-        log.error("\(id) keeps opening without the home time zone")
+        log.error("\(id, privacy: .public) keeps opening without the home time zone")
     }
+}
+
+/// Opens the app at `url` in place of `gone`, the copy that just quit. LaunchServices hears of an exit a
+/// moment after the process ends, and an open before then goes to the copy that quit: it fails with
+/// procNotFound, or hands that copy back. Dato quits fast enough to lose that race every time, and was
+/// left closed. So it tries again, for up to 10 seconds, until a new copy runs.
+func open(_ url: URL, _ config: NSWorkspace.OpenConfiguration, replacing gone: pid_t) async throws -> NSRunningApplication {
+    for attempt in 1...40 {
+        do {
+            let app = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+            if app.processIdentifier != gone { return app }
+        } catch where attempt < 40 {}
+        try? await Task.sleep(for: .milliseconds(250))
+    }
+    throw POSIXError(.ESRCH)
 }
 
 /// Whether `pid` is still a process (one of another user's counts: it can't be signalled, but it's there).
