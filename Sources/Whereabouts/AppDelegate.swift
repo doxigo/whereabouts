@@ -149,9 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             ("IP", loc?.ip, nil),
             ("Provider", loc?.isp, nil),
             ("VPN", m.geo.vpnName ?? loc?.isVpn.map { $0 ? "Detected" : "Not detected" }, nil),
-            check("DNS", disabled: m.leak.dns.state == .off, m.leak.dns.state.label, m.leak.dns.state.tone),
-            check("IPv6", disabled: m.leak.ipv6.state == .off, m.leak.ipv6.state.label, m.leak.ipv6.state.tone),
-            check("UDP", disabled: m.leak.udp.state == .off, m.leak.udp.state.label, m.leak.udp.state.tone),
+            check("DNS", disabled: m.leak.dns.state == .off, m.leak.dns.label, m.leak.dns.state.tone),
+            check("IPv6", disabled: m.leak.ipv6.state == .off, m.leak.ipv6.label, m.leak.ipv6.state.tone),
+            check("UDP", disabled: m.leak.udp.state == .off, m.leak.udp.label, m.leak.udp.state.tone),
             ("IP time zone", loc?.timeZone.map(zoneName), nil),
             ("Mac time zone", zoneName(m.systemTimeZone), warnings.contains { $0.kind == .timeZone || $0.kind == .automaticZone } ? .warning : nil),
         ]

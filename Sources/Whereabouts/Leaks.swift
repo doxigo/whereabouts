@@ -79,7 +79,14 @@ func dnsEgress(_ digOutput: String) -> String? {
 func isLoopbackAddress(_ address: String) -> Bool { address == "::1" || address.hasPrefix("127.") }
 
 func unansweredExitCheck(_ transport: String) -> ExitCheck {
-    ExitCheck(state: .unknown, message: "No \(transport) probe answered. Connectivity and leak protection could not be verified.")
+    ExitCheck(state: .unknown, message: "No \(transport) probe answered. Connectivity and leak protection could not be verified.", reason: "No answer")
+}
+
+/// No IPv6 echo came back. A dual-stack host that answered over IPv4 shows the internet is up and
+/// IPv6 has no way out of this network; with no answer at all, nothing is known.
+func missingIpv6Check(ipv4Answered: Bool) -> ExitCheck {
+    ipv4Answered ? ExitCheck(state: .none, message: "This network has no IPv6 route to the internet, so nothing can leak over IPv6.")
+        : unansweredExitCheck("IPv6")
 }
 
 extension Monitor {
@@ -116,7 +123,7 @@ extension Monitor {
 
         // AAAA-only hosts: an answer proves real IPv6 egress and shows the address the internet sees.
         // Then dual-stack ones: a proxy on the way reaches those over IPv6 even when this Mac has none.
-        var ip: String?
+        var ip: String?, ipv4Answered = false
         for url in ["https://api6.ipify.org?format=json", "https://ipv6.icanhazip.com",
                     "https://api64.ipify.org?format=json", "https://icanhazip.com"] where ip == nil {
             guard let data = try? await fetchData(url, timeout: 6) else { continue }
@@ -124,19 +131,22 @@ extension Monitor {
             let value = text.hasPrefix("{")
                 ? ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["ip"] as? String
                 : text
-            // No colon isn't IPv6 — an IPv4 echo would be a false "you have IPv6".
-            if let value, value.contains(":"), isIPAddress(value) { ip = value }
+            // No colon isn't IPv6 — an IPv4 echo would be a false "you have IPv6". Only a dual-stack host can send one.
+            guard let value, isIPAddress(value) else { continue }
+            if value.contains(":") { ip = value } else { ipv4Answered = true }
         }
-        guard let ip else { return unansweredExitCheck("IPv6") }
+        guard let ip else { return missingIpv6Check(ipv4Answered: ipv4Answered) }
 
         let located = await geolocate(ip)
         var check = ExitCheck(state: .unknown, ip: ip, isp: located?.isp, message: "")
         guard let located, let code = located.countryCode else {
             check.message = "You have IPv6 (\(ip)) but its location couldn't be resolved."
+            check.reason = "Can't locate"
             return check
         }
         guard let baseline, let baseCode = baseline.countryCode else {
             check.message = "IPv6 exits in \(located.place) — waiting on an IPv4 result to compare against."
+            check.reason = "Waiting on IPv4"
             return check
         }
         if code != baseCode {
@@ -170,7 +180,7 @@ extension Monitor {
         }
         guard let baseline, let exitIp = baseline.ip, let exitCode = baseline.countryCode else {
             return ExitCheck(state: .unknown, ip: seen.joined(separator: ", "),
-                             message: "UDP leaves from \(seen.joined(separator: ", ")). Waiting on an IPv4 result to compare against.")
+                             message: "UDP leaves from \(seen.joined(separator: ", ")). Waiting on an IPv4 result to compare against.", reason: "Waiting on IPv4")
         }
         let others = udpStrays(seen, exit: exitIp)
         guard !others.isEmpty else {
@@ -193,7 +203,7 @@ extension Monitor {
         }
         let list = others.joined(separator: ", ")
         guard let place = places.first else {
-            return ExitCheck(state: .unknown, ip: list, message: "UDP leaves from \(list), not your IP address, and its location couldn't be resolved.")
+            return ExitCheck(state: .unknown, ip: list, message: "UDP leaves from \(list), not your IP address, and its location couldn't be resolved.", reason: "Can't locate")
         }
         // Same place, but a page sees two addresses for one visitor: a proxy sending UDP, or each connection, out another way.
         return ExitCheck(state: .differs, ip: list, isp: place.isp,
@@ -203,11 +213,11 @@ extension Monitor {
     private func checkDns(_ baseline: Location?) async -> DnsCheck {
         guard settings.dnsCheck else { return DnsCheck(state: .off, message: "DNS leak check is off.") }
         guard let output = try? await run("/usr/sbin/scutil", ["--dns"]) else {
-            return DnsCheck(state: .unknown, message: "Couldn't read the system DNS configuration.")
+            return DnsCheck(state: .unknown, message: "Couldn't read the system DNS configuration.", reason: "Can't read settings")
         }
         let blocks = parseResolvers(output)
         guard let block = blocks.first(where: { $0.scopedDomain == nil }) ?? blocks.first else {
-            return DnsCheck(state: .unknown, message: "No DNS resolvers are configured.")
+            return DnsCheck(state: .unknown, message: "No DNS resolvers are configured.", reason: "No resolvers")
         }
 
         let iface = block.iface

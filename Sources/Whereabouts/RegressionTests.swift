@@ -145,6 +145,10 @@ import Foundation
     check(statusMark(geo: .safe, site: .mismatch, blocked: false, leaking: false) == .refused, "site violations cannot show all-clear")
     check(statusMark(geo: .safe, site: .mismatch, blocked: true, leaking: true) == .blocked, "the firewall state outranks all other statuses")
     for transport in ["IPv6", "UDP"] { check(unansweredExitCheck(transport).state == .unknown, "failed \(transport) probes stay unknown") }
+    check(unansweredExitCheck("UDP").label == "No answer" && ExitCheck(state: .unknown, message: "").label == "Unknown" && missingIpv6Check(ipv4Answered: true).label == "Not in use",
+          "an unknown check shows its reason when it has one")
+    check(missingIpv6Check(ipv4Answered: true).state == .none && missingIpv6Check(ipv4Answered: false).state == .unknown,
+          "an IPv4-only answer from a dual-stack host means no IPv6, and no answer at all stays unknown")
     check(nextCheckDelay(interval: 60, elapsed: 24) == 36 && nextCheckDelay(interval: 60, elapsed: 80) == 0, "checks are scheduled from their start time")
 
     let json: [String: Any] = ["success": true, "ip": "192.0.2.1", "country_code": "PT", "connection": ["asn": 64500, "isp": "Fixture"]]

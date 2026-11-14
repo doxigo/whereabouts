@@ -129,11 +129,11 @@ struct StatusView: View {
     private var leakChecks: some View {
         Section("Leak checks") {
             ForEach([("IPv6 exit", m.leak.ipv6), ("UDP exit", m.leak.udp)].filter { $0.1.state != .off }, id: \.0) { title, check in
-                leakRow(title, tone: check.state.tone, label: check.state.label, message: check.message, isLeak: check.state == .leak,
+                leakRow(title, tone: check.state.tone, label: check.label, message: check.message, isLeak: check.state == .leak,
                         details: check.ip.map { [[$0, check.isp].compactMap { $0 }.joined(separator: " · ")] } ?? [])
             }
             if m.leak.dns.state != .off {
-                leakRow("DNS resolvers", tone: m.leak.dns.state.tone, label: m.leak.dns.state.label,
+                leakRow("DNS resolvers", tone: m.leak.dns.state.tone, label: m.leak.dns.label,
                         message: m.leak.dns.message, isLeak: m.leak.dns.state == .leak,
                         details: m.leak.dns.resolvers.map {
                             [$0.address, $0.iface, $0.country ?? (isLoopbackAddress($0.address) ? "this Mac" : $0.isPrivate ? "local network" : nil)].compactMap { $0 }.joined(separator: " · ")
@@ -230,7 +230,7 @@ extension ExitState {
         switch self {
         case .off: "Off"
         case .checking: "Checking…"
-        case .none: "None"
+        case .none: "Not in use"
         case .ok: "No leak"
         case .differs: "Other address"
         case .leak: "Leak"

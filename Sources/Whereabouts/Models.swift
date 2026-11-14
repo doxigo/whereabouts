@@ -329,6 +329,10 @@ struct ExitCheck {
     var ip: String?
     var isp: String?
     var message: String
+    /// Why the state is `unknown`, in a word or two: the menu has no room for `message`.
+    var reason: String?
+
+    var label: String { reason ?? state.label }
 }
 
 struct DnsResolver {
@@ -344,6 +348,10 @@ struct DnsCheck {
     var state: DnsState
     var resolvers: [DnsResolver] = []
     var message: String
+    /// As `ExitCheck.reason`.
+    var reason: String?
+
+    var label: String { reason ?? state.label }
 }
 
 struct LeakStatus {
