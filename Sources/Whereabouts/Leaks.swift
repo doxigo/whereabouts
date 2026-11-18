@@ -82,11 +82,15 @@ func unansweredExitCheck(_ transport: String) -> ExitCheck {
     ExitCheck(state: .unknown, message: "No \(transport) probe answered. Connectivity and leak protection could not be verified.", reason: "No answer")
 }
 
-/// No IPv6 echo came back. A dual-stack host that answered over IPv4 shows the internet is up and
-/// IPv6 has no way out of this network; with no answer at all, nothing is known.
-func missingIpv6Check(ipv4Answered: Bool) -> ExitCheck {
-    ipv4Answered ? ExitCheck(state: .none, message: "This network has no IPv6 route to the internet, so nothing can leak over IPv6.")
-        : unansweredExitCheck("IPv6")
+/// An IPv4 echo alone says nothing about the route an IPv6 connection could take.
+func missingIpv6Check(ipv4Answered: Bool, pathSupportsIPv6: Bool?) -> ExitCheck {
+    if ipv4Answered && pathSupportsIPv6 == false {
+        return ExitCheck(state: .none, message: "macOS reports no IPv6 on the current network path. Only an IPv4 echo answered.")
+    }
+    if ipv4Answered {
+        return ExitCheck(state: .unknown, message: "Only IPv4 answered. IPv6 leak protection could not be verified.", reason: "IPv6 unverified")
+    }
+    return unansweredExitCheck("IPv6")
 }
 
 extension Monitor {
@@ -135,7 +139,7 @@ extension Monitor {
             guard let value, isIPAddress(value) else { continue }
             if value.contains(":") { ip = value } else { ipv4Answered = true }
         }
-        guard let ip else { return missingIpv6Check(ipv4Answered: ipv4Answered) }
+        guard let ip else { return missingIpv6Check(ipv4Answered: ipv4Answered, pathSupportsIPv6: pathSupportsIPv6) }
 
         let located = await geolocate(ip)
         var check = ExitCheck(state: .unknown, ip: ip, isp: located?.isp, message: "")

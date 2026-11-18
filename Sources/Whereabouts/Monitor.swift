@@ -18,6 +18,7 @@ final class Monitor {
     var kill = KillSwitchStatus()
     private(set) var history: [HistoryEntry]
     var timeline: [ProtectionEvent]
+    @ObservationIgnored let timelineWriter: TimelineWriter?
     private(set) var isCheckingAll = false
     /// A newer GitHub release than this build, if update checks are on.
     private(set) var latestRelease: Release?
@@ -98,10 +99,10 @@ final class Monitor {
     }
     @ObservationIgnored var verificationTask: Task<Void, Never>?
     @ObservationIgnored var verificationGeneration: Int?
-    @ObservationIgnored var verificationAddresses: (Bool) async -> [String] = { dnsOnly in
+    @ObservationIgnored var verificationAddresses: (Bool) async -> [String] = { bootstrap in
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: dnsOnly ? KillSwitch.dnsAddresses() : KillSwitch.holdAddresses(strict: true))
+                continuation.resume(returning: KillSwitch.holdAddresses(strict: true, includeLookups: !bootstrap))
             }
         }
     }
@@ -110,8 +111,9 @@ final class Monitor {
     @ObservationIgnored var preparedHoldAddresses: [String] = []
     @ObservationIgnored private var holdPreparationTask: Task<Void, Never>?
 
-    init(settings: AppSettings? = nil, history: [HistoryEntry]? = nil, testing: Bool = false) {
+    init(settings: AppSettings? = nil, history: [HistoryEntry]? = nil, testing: Bool = false, timelineWriter: TimelineWriter? = nil) {
         self.testing = testing
+        self.timelineWriter = timelineWriter ?? (testing || Demo.enabled ? nil : TimelineWriter(save: Store.saveTimeline))
         self.settings = settings ?? (Demo.enabled ? Demo.settings : Store.loadSettings())
         self.history = history ?? (Demo.enabled ? Demo.history : Store.loadHistory())
         timeline = testing || Demo.enabled ? [] : Store.loadTimeline()
@@ -178,6 +180,7 @@ final class Monitor {
         next.normalize()
         guard next != old else { return }
         settings = next
+        if old.strictProtection != next.strictProtection { preparedHoldAddresses = [] }
         if Demo.enabled { return }
         let rulesChanged = old.ruleMode != next.ruleMode || old.countries != next.countries
             || old.ispMode != next.ispMode || old.expectedIsps != next.expectedIsps || old.confirmViolations != next.confirmViolations
@@ -392,6 +395,11 @@ final class Monitor {
         _ = await (r, s, l)
     }
 
+    var pathSupportsIPv6: Bool? {
+        guard let path = pathMonitor?.currentPath, path.status == .satisfied else { return nil }
+        return path.supportsIPv6
+    }
+
     /// VPN connect/disconnect or Wi-Fi switch. NWPathMonitor reports the change;
     /// a short debounce absorbs the burst of updates one switch produces.
     private func startNetworkWatch() {
@@ -557,7 +565,7 @@ final class Monitor {
                                 : "Can't check your location while the network is blocked.")
             }
             return geo
-        } else if pathSatisfied && unknownStreak == 0 && geo.location != nil {
+        } else if !(settings.killSwitch && settings.strictProtection) && pathSatisfied && unknownStreak == 0 && geo.location != nil {
             // One unanswered check on an unchanged route is nearly always a few seconds of resets
             // upstream. Keep the last answer and its check time until the next check. A route
             // change, wake or sleep clears geo.location first, so this never hides one.
@@ -568,7 +576,7 @@ final class Monitor {
             // "No route out" vs "the provider is broken": addresses survive sleep and
             // VPN transitions, so only a real probe can tell them apart.
             var offline = !pathSatisfied
-            if !offline { offline = !(await anyReachable()) }
+            if !offline && !(settings.killSwitch && settings.strictProtection) { offline = !(await anyReachable()) }
             status = GeoStatus(kind: offline ? .offline : .unknown, checkedAt: Date(),
                                message: offline ? "No internet connection." : "Unable to check your location (provider unavailable).")
         }

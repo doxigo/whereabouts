@@ -1,5 +1,38 @@
 import Foundation
 
+final class TimelineWriter {
+    private let queue = DispatchQueue(label: "whereabouts.timeline", qos: .utility)
+    private let save: ([ProtectionEvent]) -> Void
+    private var pending: [ProtectionEvent]?
+
+    init(save: @escaping ([ProtectionEvent]) -> Void) { self.save = save }
+
+    func submit(_ events: [ProtectionEvent]) {
+        queue.async {
+            if events.isEmpty {
+                self.pending = nil
+                self.save([])
+                return
+            }
+            if self.pending == nil {
+                self.queue.asyncAfter(deadline: .now() + .milliseconds(250)) { self.writePending() }
+            }
+            self.pending = events
+        }
+    }
+
+    func flush() {
+        queue.async { self.writePending() }
+        queue.sync {}
+    }
+
+    private func writePending() {
+        guard let events = pending else { return }
+        pending = nil
+        save(events)
+    }
+}
+
 /// settings.json + history.json under ~/Library/Application Support/Whereabouts.
 /// On first launch it adopts GeoMeister's files, which share the format.
 enum Store {
@@ -92,7 +125,7 @@ enum StatusFile {
     }
 
     static func encode(_ status: GeoStatus, pid: Int32 = getpid()) -> Data? {
-        let l = status.location
+        let l = status.kind == .safe || status.kind == .violation ? status.location : nil
         let record = Record(pid: pid, checkedAt: Int((status.checkedAt ?? Date()).timeIntervalSince1970), kind: status.kind.rawValue,
                             ip: l?.ip, countryCode: l?.countryCode, country: l?.country, region: l?.region,
                             city: l?.city, isp: l?.isp, isVpn: l?.isVpn)

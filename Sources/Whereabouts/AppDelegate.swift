@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         monitor.releaseKillSwitchOnQuit()
         // Readers also check the pid, which covers a crash.
         StatusFile.remove()
+        monitor.timelineWriter?.flush()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {

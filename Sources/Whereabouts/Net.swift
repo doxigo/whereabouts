@@ -283,10 +283,12 @@ func parseIpInfo(_ d: [String: Any]) throws -> Location {
 
 func isIPAddress(_ text: String) -> Bool { IPv4Address(text) != nil || IPv6Address(text) != nil }
 
+let exitEchoHosts = ["api.ipify.org", "ipv4.icanhazip.com"]
+
 func lookupExit() async -> (Location, Provider)? {
     // A fresh IP echo checks the route every time; cache only that exact IP's metadata.
-    for url in ["https://api.ipify.org", "https://ipv4.icanhazip.com"] {
-        guard let data = try? await fetchData(url, timeout: 5),
+    for host in exitEchoHosts {
+        guard let data = try? await fetchData("https://\(host)", timeout: 5),
               let ip = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               IPv4Address(ip) != nil else { continue }
         return await exitMetadata(ip)

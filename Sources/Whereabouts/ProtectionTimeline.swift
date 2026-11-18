@@ -53,13 +53,13 @@ extension Monitor {
     func recordProtection(_ category: String, _ detail: String, location: TimelineLocation? = nil) {
         guard settings.protectionTimeline, !Demo.enabled else { return }
         timeline.insert(ProtectionEvent(category: category, detail: detail, location: location), at: 0)
-        timeline = Array(timeline.prefix(Store.maxTimeline))
-        if !testing { Store.saveTimeline(timeline) }
+        if timeline.count > Store.maxTimeline { timeline.removeLast() }
+        timelineWriter?.submit(timeline)
     }
 
     func clearTimeline() {
         timeline = []
-        if !testing { Store.saveTimeline([]) }
+        timelineWriter?.submit([])
     }
 }
 

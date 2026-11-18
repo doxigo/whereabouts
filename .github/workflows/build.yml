@@ -22,3 +22,5 @@ jobs:
         run: build/Whereabouts.app/Contents/MacOS/Whereabouts --selftest
       - name: Update trust tests
         run: build/Whereabouts.app/Contents/MacOS/Whereabouts --update-selftest
+      - name: CPU measurement regression
+        run: python3 Scripts/test_measure_runtime.py

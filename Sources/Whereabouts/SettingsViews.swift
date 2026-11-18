@@ -485,7 +485,7 @@ struct ProtectionSettings: View {
                 }
                 .disabled(!m.settings.killSwitch)
                 if m.settings.strictProtection {
-                    Text("Verification services, DNS, local networks and known VPN endpoints remain reachable. An allowed check lifts the restriction; Unblock Now pauses it for two minutes.")
+                    Text("Verification services, DNS, local networks and configured IP addresses of connecting or connected VPN services remain reachable. An allowed check lifts the restriction; Unblock Now pauses it for two minutes.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if m.kill.active {

@@ -1,4 +1,5 @@
 import Foundation
+import SystemConfiguration
 
 // Network kill switch: loads block rules into the macOS packet filter (pf), the
 // same mechanism a VPN client's "network lock" uses. Interfaces are never touched
@@ -25,17 +26,42 @@ func reblockReason(_ geo: GeoStatus, _ site: SiteWatchStatus) -> String? {
 }
 
 enum KillSwitch {
-    static let helperVersion = 5
+    static let helperVersion = 6
     static let helperPath = "\(Privileged.appDir)/killswitch-helper.sh"
     static let tokenFile = "\(Privileged.appDir)/killswitch-pf.token"
     static let sudoersPath = "/etc/sudoers.d/whereabouts-killswitch"
     static let anchor = "com.apple/100.Whereabouts"
 
-    /// Lifts the block and removes the helper without the app — the safety net
-    /// for a force-quit while blocked, or deleting the app while armed.
+    /// Emergency recovery also works if the installed helper is missing.
     static var manualUnblockCommand: String {
-        "sudo pfctl -a \(Privileged.q(anchor)) -F all && sudo rm -f \(Privileged.q(sudoersPath)) \(Privileged.q(helperPath)) \(Privileged.q(tokenFile))"
+        "sudo \(Privileged.q(helperPath)) release || sudo /sbin/pfctl -a \(Privileged.q(anchor)) -F all"
     }
+
+    // Use the current release logic during uninstall too, including for older installations.
+    private static let releaseRules = #"""
+    $PFCTL -a "$ANCHOR" -F all >/dev/null || exit 3
+    RULES=$($PFCTL -a "$ANCHOR" -s rules) || exit 3
+    [ -z "$RULES" ] || { echo "whereabouts: firewall anchor still has rules" >&2; exit 3; }
+    if [ -s "$TOKEN_FILE" ]; then
+      remaining=$(/usr/bin/mktemp "${TOKEN_FILE}.XXXXXX") || exit 4
+      trap '/bin/rm -f "$remaining"' EXIT
+      while IFS= read -r tok || [ -n "$tok" ]; do
+        [ -n "$tok" ] || continue
+        if ! error=$($PFCTL -X "$tok" 2>&1); then
+          # A reboot, or an interrupted earlier release, can leave an already-invalid token.
+          if [[ "$error" != *"pf: token invalid"* ]]; then
+            printf '%s\n' "$error" >&2
+            printf '%s\n' "$tok" >> "$remaining" || exit 4
+          fi
+        fi
+      done < "$TOKEN_FILE" || exit 4
+      if [ -s "$remaining" ]; then
+        /bin/mv -f "$remaining" "$TOKEN_FILE" || exit 4
+        exit 4
+      fi
+      /bin/rm -f "$remaining" "$TOKEN_FILE" || exit 4
+    fi
+    """#
 
     static let helperScript = #"""
     #!/bin/bash
@@ -139,17 +165,11 @@ enum KillSwitch {
         load_rules
         ;;
       release)
-        $PFCTL -a "$ANCHOR" -F all >/dev/null 2>&1
-        if [ -s "$TOKEN_FILE" ]; then
-          while IFS= read -r tok; do
-            [ -n "$tok" ] && $PFCTL -X "$tok" >/dev/null 2>&1
-          done < "$TOKEN_FILE"
-          rm -f "$TOKEN_FILE"
-        fi
+        \#(releaseRules)
         echo inactive
         ;;
       status)
-        RULES=$($PFCTL -a "$ANCHOR" -s rules 2>/dev/null)
+        RULES=$($PFCTL -a "$ANCHOR" -s rules) || exit 3
         if echo "$RULES" | grep -qF "whereabouts-verify"; then
           echo verifying
         elif echo "$RULES" | grep -qF "block drop quick"; then
@@ -174,9 +194,11 @@ enum KillSwitch {
     static let teardownScript = """
     #!/bin/bash
     set -uo pipefail
-    # Lift any active block first — removing the helper must never leave pf locked.
-    \(Privileged.q(helperPath)) release >/dev/null 2>&1 || /sbin/pfctl -a \(Privileged.q(anchor)) -F all >/dev/null 2>&1
-    /bin/rm -f \(Privileged.q(sudoersPath)) \(Privileged.q(helperPath)) \(Privileged.q(tokenFile))
+    PFCTL=/sbin/pfctl
+    ANCHOR=\(Privileged.q(anchor))
+    TOKEN_FILE=\(Privileged.q(tokenFile))
+    \(releaseRules)
+    /bin/rm -f \(Privileged.q(sudoersPath)) \(Privileged.q(helperPath)) || exit 1
     /bin/rmdir \(Privileged.q(Privileged.appDir)) 2>/dev/null
     exit 0
     """
@@ -205,17 +227,45 @@ enum KillSwitch {
         (try? runSync("/usr/sbin/scutil", ["--dns"], timeout: 3)).map(dnsHoldAddresses) ?? []
     }
 
-    static func holdAddresses(strict: Bool = false) -> [String] {
-        let lookups = ["api.ipify.org", "ipv4.icanhazip.com"] + Provider.allCases.map(\.rawValue).flatMap(resolveAddresses)
-        var passed = dnsAddresses() + lookups
-        if let probe = lookups.first(where: { !$0.contains(":") }),
-           let route = try? runSync("/sbin/route", ["-n", "get", probe], timeout: 3),
-           isTunnelInterface(route.firstMatch(of: /interface: (\S+)/).map { String($0.1) }) {
-            // -l: without it netstat cuts an IPv6 address to 16 characters, which matches no local address.
-            let netstat = ["inet", "inet6"].compactMap { try? runSync("/usr/sbin/netstat", ["-anl", "-f", $0], timeout: 3) }.joined()
-            passed += directPeers(netstat, local: Set(physicalAddresses())).filter { !lookups.contains($0) }.map { strict ? "vpn:\($0)" : $0 }
+    static func holdAddresses(strict: Bool = false, includeLookups: Bool = true,
+                              resolve: (String) -> [String] = resolveAddresses,
+                              dns: () -> [String] = dnsAddresses, vpnPeers: () -> [String] = configuredVPNPeers,
+                              sleepPeers: ([String]) -> [String] = sleepPeers) -> [String] {
+        let hosts = exitEchoHosts + Provider.allCases.map(\.rawValue)
+        let lookups = includeLookups ? hosts.flatMap(resolve).filter(accepts) : []
+        let peers = strict ? vpnPeers().filter(accepts).map { "vpn:\($0)" } : sleepPeers(lookups)
+        var seen = Set<String>()
+        return Array((dns() + lookups + peers).filter { seen.insert($0).inserted }.prefix(64))
+    }
+
+    static func configuredVPNPeers() -> [String] {
+        guard let store = SCDynamicStoreCreate(nil, "Whereabouts" as CFString, nil, nil),
+              let services = SCDynamicStoreCopyMultiple(store, nil, ["Setup:/Network/Service/[^/]+/(IPSec|PPP|VPN)$"] as CFArray)
+                as? [String: [String: Any]] else { return [] }
+        return configuredVPNPeers(in: services) { id in
+            guard let connection = SCNetworkConnectionCreateWithServiceID(nil, id as CFString, nil, nil) else { return false }
+            let status = SCNetworkConnectionGetStatus(connection)
+            return status == .connected || status == .connecting
         }
-        return Array(passed.prefix(64)) // the helper's limit
+    }
+
+    static func configuredVPNPeers(in services: [String: [String: Any]], active: (String) -> Bool) -> [String] {
+        services.sorted { $0.key < $1.key }.compactMap { key, options in
+            let parts = key.split(separator: "/")
+            guard parts.count == 5, parts.prefix(3) == ["Setup:", "Network", "Service"],
+                  ["IPSec", "PPP", "VPN"].contains(parts[4]),
+                  let endpoint = options[parts[4] == "PPP" ? "CommRemoteAddress" : "RemoteAddress"] as? String,
+                  accepts(endpoint), active(String(parts[3])) else { return nil }
+            return endpoint
+        }
+    }
+
+    private static func sleepPeers(_ lookups: [String]) -> [String] {
+        guard let probe = lookups.first(where: { !$0.contains(":") }),
+              let route = try? runSync("/sbin/route", ["-n", "get", probe], timeout: 3),
+              isTunnelInterface(route.firstMatch(of: /interface: (\S+)/).map { String($0.1) }) else { return [] }
+        let netstat = ["inet", "inet6"].compactMap { try? runSync("/usr/sbin/netstat", ["-anl", "-f", $0], timeout: 3) }.joined(separator: "\n")
+        return directPeers(netstat, local: Set(physicalAddresses())).filter { !lookups.contains($0) }
     }
 }
 
@@ -317,8 +367,8 @@ extension Monitor {
             kill.error = nil
             killActivation += 1
             recordProtection("Firewall", "Restricted internet while verifying the connection.")
-            for dnsOnly in [true, false] {
-                let addresses = await verificationAddresses(dnsOnly)
+            for bootstrap in [true, false] {
+                let addresses = await verificationAddresses(bootstrap)
                 guard generation == pathChanges, settings.strictProtection, settings.killSwitch,
                       kill.held, kill.verifying, !killInFlight, !kill.suppressed, pausedUntil == nil, !Task.isCancelled else { return }
                 try await loadVerificationRules(addresses)
@@ -398,6 +448,9 @@ extension Monitor {
                 try await Privileged.run(KillSwitch.teardownScript, prompt: "Whereabouts needs your admin password to remove the kill switch helper.")
                 kill = KillSwitchStatus(reblockAt: kill.reblockAt)
             } catch {
+                update { $0.killSwitch = true }
+                kill.error = "The kill switch could not be removed. Retry disabling it in Settings."
+                await reconcileProtection()
                 log.error("Kill switch teardown failed: \(error.localizedDescription)")
             }
             return
@@ -434,7 +487,7 @@ extension Monitor {
     func refreshKillSwitchState() async {
         let version = KillSwitch.installedVersion()
         kill.needsSetup = settings.killSwitch && version != KillSwitch.helperVersion
-        guard version == KillSwitch.helperVersion,
+        guard version != nil,
               let state = try? await KillSwitch.sudoHelper("status").trimmingCharacters(in: .whitespacesAndNewlines),
               ["active", "verifying", "inactive"].contains(state)
         else { return }
@@ -523,6 +576,8 @@ extension Monitor {
             killActivation += 1
             recordProtection("Firewall", "Manually unblocked for two minutes.")
         } catch {
+            reblockTask?.cancel()
+            kill.reblockAt = nil
             kill.error = "Failed to lift the block. Run this in Terminal, or reboot: \(KillSwitch.manualUnblockCommand)"
         }
     }
@@ -532,7 +587,7 @@ extension Monitor {
     /// lookups still get through. Synchronous: macOS waits for this notification's observers.
     func holdForSleep() {
         guard settings.killSwitch, settings.holdOnWake || settings.strictProtection, !kill.active, !kill.suppressed, pausedUntil == nil,
-              !killInFlight, !Demo.enabled, testing || KillSwitch.installedVersion() == KillSwitch.helperVersion else { return }
+              !killInFlight, !Demo.enabled, testing || (KillSwitch.installedVersion() ?? 0) >= 5 else { return }
         let addresses = preparedHoldAddresses
         do {
             if settings.strictProtection { try strictSleepFirewall(addresses) }

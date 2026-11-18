@@ -24,6 +24,18 @@ class Usage(ctypes.Structure):
     ]
 
 
+class MachTimebase(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+def seconds_per_tick():
+    timebase = MachTimebase()
+    system = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    if system.mach_timebase_info(ctypes.byref(timebase)) != 0 or not timebase.denom:
+        raise RuntimeError("Mach timebase unavailable.")
+    return timebase.numer / timebase.denom / 1e9
+
+
 def battery():
     raw = subprocess.check_output(["/usr/sbin/ioreg", "-a", "-r", "-c", "AppleSmartBattery"])
     records = plistlib.loads(raw)
@@ -36,15 +48,15 @@ def battery():
     )}
 
 
-def sample(lib, pid):
+def sample(lib, pid, tick_seconds):
     usage = Usage()
     if lib.proc_pid_rusage(pid, 2, ctypes.byref(usage)) != 0:
         raise RuntimeError("The measured app exited or its counters are unavailable.")
     return {
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "monotonic": time.monotonic(),
-        "cpu_seconds": (usage.user_time + usage.system_time) / 1e9,
-        "child_cpu_seconds": (usage.child_user_time + usage.child_system_time) / 1e9,
+        "cpu_seconds": (usage.user_time + usage.system_time) * tick_seconds,
+        "child_cpu_seconds": (usage.child_user_time + usage.child_system_time) * tick_seconds,
         "idle_wakeups": usage.idle_wakeups + usage.child_idle_wakeups,
         "rss_mib": usage.resident_size / 1048576,
         "footprint_mib": usage.footprint / 1048576,
@@ -64,12 +76,13 @@ def main():
     lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     lib.proc_pid_rusage.restype = ctypes.c_int
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    first = sample(lib, args.pid)
+    tick_seconds = seconds_per_tick()
+    first = sample(lib, args.pid, tick_seconds)
     samples = [first]
     print(json.dumps({"started": first["at"], "pid": args.pid, "battery": first["battery"]}), flush=True)
     while time.monotonic() - first["monotonic"] < args.seconds:
         time.sleep(min(5, max(0, args.seconds - (time.monotonic() - first["monotonic"]))))
-        samples.append(sample(lib, args.pid))
+        samples.append(sample(lib, args.pid, tick_seconds))
         args.output.write_text(json.dumps({"samples": samples}, indent=2))
     last = samples[-1]
     elapsed = last["monotonic"] - first["monotonic"]

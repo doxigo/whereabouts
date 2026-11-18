@@ -488,6 +488,21 @@ import Foundation
     let bare = String(decoding: StatusFile.encode(GeoStatus(kind: .offline, checkedAt: at1), pid: 42) ?? Data(), as: UTF8.self)
     check(bare == #"{"checkedAt":1761217200,"kind":"offline","pid":42,"version":1}"#, "status file without a location: \(bare)")
 
+    var profileSettings = AppSettings()
+    let requiringASN = ConnectionProfile(name: "Exit", locations: [SiteLocation(countryCode: "XB", country: "Exit Country")], asns: [64500])
+    profileSettings.connectionProfiles = [requiringASN]
+    profileSettings.activeProfileID = requiringASN.id
+    profileSettings.connectionProfilesEnabled = true
+    let profileKind = evaluateLocation(regional, profileSettings).kind
+    check(profileKind == .unknown, "the missing ASN produces an inconclusive profile result")
+    for kind: GeoKind in [profileKind, .offline, .checking, .violation] {
+        let status = GeoStatus(kind: kind, location: regional, checkedAt: at1)
+        let json = StatusFile.encode(status, pid: 42).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let keys = Set(json?.keys.map { $0 } ?? [])
+        check(kind == .violation ? json?["ip"] as? String == regional.ip : keys == ["pid", "checkedAt", "kind", "version"],
+              "status.json publishes location fields only for conclusive verdicts")
+    }
+
     // Updates
     let release: [String: Any] = ["tag_name": "v1.10.0", "html_url": "https://github.com/doxigo/whereabouts/releases/tag/v1.10.0", "assets": [
         ["name": "notes.txt", "browser_download_url": "https://example.com/notes.txt"],
